@@ -1,6 +1,7 @@
 from pathlib import Path
 from repo_pilot.config import RepoPilotConfig
 from repo_pilot.result import WorkflowResult
+from repo_pilot.state import AgentState
 
 class BugfixWorkflow:
     def __init__(self,config: RepoPilotConfig):
@@ -12,6 +13,13 @@ class BugfixWorkflow:
             test_command:str,
 
     )->WorkflowResult:
+        state=AgentState(
+            repo=repo,
+            issue=issue,
+            test_command=test_command,
+        )
+        
+
         print("Workflow started")
         print(f"repo={repo}")
         print(f"issue={issue}")
@@ -23,7 +31,7 @@ class BugfixWorkflow:
 
         return WorkflowResult(
             success=True,
-            message="Workflow skleleton executed successfully",
+            message="AgentState created successfully",
             iteration=0,
         )
 
