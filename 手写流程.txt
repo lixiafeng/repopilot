@@ -10,4 +10,40 @@ state.py
 
 tools.py(能够执行命令)
 
-测试文件
+测试文件(pytest)
+python -m repo_pilot.cli --repo examples/buggy_calculator --issue "divide by zero should raise ValueError" 
+AgentState started
+repo=D:\repopilot-handwrite\examples\buggy_calculator
+issue=divide by zero should raise ValueError
+Running initial test command...
+exit_code=1
+.F  [100%]
+================================== FAILURES ===================================
+___________________ test_divide_by_zero_raises_value_error ____________________
+
+    def test_divide_by_zero_raises_value_error():
+        with pytest.raises(ValueError):
+>           divide(1,0)
+
+tests\test_calculatory.py:10: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+a = 1, b = 0
+
+    def divide(a,b):
+>       return a/b
+               ^^^
+E       ZeroDivisionError: division by zero
+
+calculator.py:2: ZeroDivisionError
+=========================== short test summary info ===========================
+FAILED tests\test_calculatory.py::test_divide_by_zero_raises_value_error - Ze...
+1 failed, 1 passed in 0.38s
+
+FAILURE
+AgentState created successfully
+
+
+scanner
+
+
