@@ -2,17 +2,19 @@ from pathlib import Path
 from repo_pilot.config import RepoPilotConfig
 from repo_pilot.result import WorkflowResult
 from repo_pilot.state import AgentState
+from repo_pilot.tools import CommandTools
 
 class BugfixWorkflow:
     def __init__(self,config: RepoPilotConfig):
         self.config = config
+        self.commands=CommandTools(timeout_sec=config.command_timeout_sec)
     def run(
             self,
             repo:Path,
             issue:str,
             test_command:str,
-
     )->WorkflowResult:
+        repo=repo.resolve()
         state=AgentState(
             repo=repo,
             issue=issue,
@@ -20,19 +22,25 @@ class BugfixWorkflow:
         )
         
 
-        print("Workflow started")
+        print("AgentState started")
         print(f"repo={repo}")
         print(f"issue={issue}")
-        print(f"test_command={test_command}")
-        print(f"provider={self.config.provider}")
-        print(f"model={self.config.model}")
-        print(f"apply_patch={self.config.apply_patch}")
-        print(f"max_iterations={self.config.max_iterations}")
+        print("Running initial test command...")
+
+        test_result=self.commands.run(
+            command=test_command,
+            cwd=repo,
+        )
+        output=test_result.stdout+test_result.stderr
+
+        print(f"exit_code={test_result.exit_code}")
+        print(output)
 
         return WorkflowResult(
-            success=True,
+            success=test_result.success,
             message="AgentState created successfully",
             iteration=0,
+            test_output=output,
         )
 
     

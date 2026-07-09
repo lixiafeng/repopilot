@@ -1,0 +1,13 @@
+创建项目文件夹
+创建pyproject.toml
+创建config.py
+result.py
+workflow.py
+
+git
+
+state.py
+
+tools.py(能够执行命令)
+
+测试文件
