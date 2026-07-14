@@ -2,6 +2,7 @@ from pathlib import Path
 from repo_pilot.config import RepoPilotConfig
 from repo_pilot.result import WorkflowResult
 from repo_pilot.state import AgentState
+from repo_pilot.symbols import SymbolIndexer
 from repo_pilot.tools import CommandTools
 from repo_pilot.scanner import RepoScanner
 
@@ -10,6 +11,7 @@ class BugfixWorkflow:
         self.config = config
         self.commands=CommandTools(timeout_sec=config.command_timeout_sec)
         self.scanner=RepoScanner()
+        self.symbols_indexer=SymbolIndexer()
     def run(
             self,
             repo:Path,
@@ -43,6 +45,20 @@ class BugfixWorkflow:
         for file in state.repo_map["test_files"]:
             print(f"  -{file}")
 
+        state.symbol_index=self.symbols_indexer.build(
+            repo=repo,
+            python_files=state.repo_map["python_files"]
+        )
+
+        print("Symbols:")
+        for symbol in state.symbol_index:
+            print(
+                f"  -{symbol['type']}"
+                f"{symbol['name']}"
+                f"({symbol['file']}:{symbol['line']})"
+            )
+
+
 
 
         print("Running initial test command...")
@@ -53,11 +69,12 @@ class BugfixWorkflow:
         output=test_result.stdout+test_result.stderr
 
         print(f"exit_code={test_result.exit_code}")
+        print(f"duration_seconds={test_result.duration_seconds:.2f}")
         print(output)
 
         return WorkflowResult(
             success=test_result.success,
-            message="AgentState created successfully",
+            message="Repository scanned, symbols indexed, and initial test command executed.",
             iteration=0,
             test_output=output,
         )

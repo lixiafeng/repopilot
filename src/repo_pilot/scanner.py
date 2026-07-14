@@ -2,6 +2,15 @@ from pathlib import Path
 from typing import Any
 
 class RepoScanner:
+    IGNORED_DIRS = {
+        ".git",
+        ".venv",
+        ".venv-1",
+        "__pycache__",
+        ".pytest_cache",
+        "build",
+        "dist",
+    }
     def scan(self,repo:Path)->dict[str,Any]:
         files:list[str]=[]
         python_files:list[str]=[]
@@ -11,13 +20,19 @@ class RepoScanner:
         for path in repo.rglob("*"):
             if path.is_dir():
                 continue
-            rel=path.relative_to(repo).as_posix()
+
+            relative_path=path.relative_to(repo)
+            if any(part in  self.IGNORED_DIRS for part in relative_path.parts):
+                continue
+
+            rel=relative_path.as_posix()
+
             files.append(rel)
 
             if path.suffix==".py":
                 python_files.append(rel)
 
-            if path.name.startswith("test_") or rel.startswith("tests/"):
+            if path.name.startswith("test_") or "tests" in relative_path.parts:
                 test_files.append(rel)
 
             if path.name in {"pyproject.toml","setup.py","requirements.txt"}:
