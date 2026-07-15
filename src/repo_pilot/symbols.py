@@ -59,7 +59,7 @@ class SymbolIndexer:
                 elif isinstance(node,ast.ClassDef):
                     symbols.append(
                         {
-                         "type":"class",
+                        "type":"class",
                         "name":node.name,
                         "file":rel_path,
                         "line":node.lineno,

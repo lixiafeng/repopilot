@@ -44,6 +44,10 @@ FAILURE
 AgentState created successfully
 
 
-scanner
+scanner :浏览文件
 
 
+symbolIndex：建立ast
+
+
+failure
