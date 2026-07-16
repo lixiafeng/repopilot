@@ -7,6 +7,8 @@ from repo_pilot.tools import CommandTools
 from repo_pilot.scanner import RepoScanner
 from repo_pilot.failure import FailureAnalyzer
 from repo_pilot.context import ContextBuilder
+from repo_pilot.provider import create_provider
+from repo_pilot.planner import PatchPlanner
 
 class BugfixWorkflow:
     def __init__(self,config: RepoPilotConfig):
@@ -19,6 +21,11 @@ class BugfixWorkflow:
             max_files=5,
             max_chars_per_files=4000,
         )
+        self.provider=create_provider(
+            provider_name=config.provider,
+            model=config.model,
+        )
+        self.planner=PatchPlanner(provider=self.provider)
 
     def run(
             self,
@@ -133,6 +140,37 @@ class BugfixWorkflow:
             f"{symbol['name']} "
             f"({symbol['file']}:{symbol['line']})"
             )
+            
+        print("Creating repair plan...")
+        state.plan=self.planner.plan(
+            context_pack=state.context_pack,
+        )
+        print("Repair plan:")
+        print(
+            f"  root cause: "
+            f"{state.plan['root_cause_hypothesis']}"
+        )
+
+        print("  files to inspect:")
+        for file_name in state.plan["files_to_inspect"]:
+            print(f"    - {file_name}")
+
+        print("  files to modify:")
+        for file_name in state.plan["files_to_modify"]:
+            print(f"    - {file_name}")
+
+        print(
+            f"  patch strategy: "
+            f"{state.plan['patch_strategy']}"
+        )
+
+        print("  verification commands:")
+        for command in state.plan["verification_commands"]:
+            print(f"    - {command}")
+
+        print("  risks:")
+        for risk in state.plan["risks"]:
+            print(f"    - {risk}")
             
 
         return WorkflowResult(

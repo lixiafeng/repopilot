@@ -50,4 +50,8 @@ scanner :浏览文件
 symbolIndex：建立ast
 
 
-failure
+failure：用正则提取错误信息、错误文件、错误位置
+
+contextbuilder
+
+provider
