@@ -38,6 +38,25 @@ class FakeProvider:
                 output_tokens=10,
                 estimated_cost=0.0,
             )
+        
+        if"TASK: CREATE_JSON_PATCH" in prompt:
+            content="""
+{"operations":[{
+"type":"replace_text",
+"path":"calculator.py",
+"old":"def divide(a,b):\\n    return a / b\\n",
+"new":"def divide(a,b):\\n    if b == 0:\\n        raise ValueError('Division by zero')\\n    return a / b\\n"
+}
+],
+"notes":"Add an explicit zero check before division." 
+}""".strip()
+            return ModelResponse(
+                content=content,
+                input_tokens=20,
+                output_tokens=10,
+                estimated_cost=0.0,
+            )
+
         return ModelResponse(
             content="FakeProvider received the prompt successfully.",
                 input_tokens=20,

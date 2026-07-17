@@ -9,6 +9,7 @@ from repo_pilot.failure import FailureAnalyzer
 from repo_pilot.context import ContextBuilder
 from repo_pilot.provider import create_provider
 from repo_pilot.planner import PatchPlanner
+from repo_pilot.patcher import Patcher
 
 class BugfixWorkflow:
     def __init__(self,config: RepoPilotConfig):
@@ -26,6 +27,10 @@ class BugfixWorkflow:
             model=config.model,
         )
         self.planner=PatchPlanner(provider=self.provider)
+        
+        self.patcher=Patcher(
+            provider=self.provider,
+        )
 
     def run(
             self,
@@ -171,6 +176,25 @@ class BugfixWorkflow:
         print("  risks:")
         for risk in state.plan["risks"]:
             print(f"    - {risk}")
+
+        print("Create JSON patch...")
+        state.patch=self.patcher.propose_patch(
+            context_pack=state.context_pack,
+            plan=state.plan,     
+        )
+        print("JSON patch:")
+        print(f"  notes: {state.patch.get('notes', '')}")
+        print("  operations:")
+        for operation in state.patch["operations"]:
+            print(f"    type: {operation['type']}")
+            print(f"    path: {operation['path']}")
+
+            print("    old:")
+            print(operation["old"])
+
+            print("    new:")
+            print(operation["new"])
+
             
 
         return WorkflowResult(
