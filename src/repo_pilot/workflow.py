@@ -10,6 +10,7 @@ from repo_pilot.context import ContextBuilder
 from repo_pilot.provider import create_provider
 from repo_pilot.planner import PatchPlanner
 from repo_pilot.patcher import Patcher
+from repo_pilot.reviewer import PatchReviewer
 
 class BugfixWorkflow:
     def __init__(self,config: RepoPilotConfig):
@@ -31,6 +32,7 @@ class BugfixWorkflow:
         self.patcher=Patcher(
             provider=self.provider,
         )
+        self.reviewer=PatchReviewer()
 
     def run(
             self,
@@ -194,18 +196,76 @@ class BugfixWorkflow:
 
             print("    new:")
             print(operation["new"])
+        
+        print("Reviewing JSON patch...")
+        review_result=self.reviewer.review(
+            patch=state.patch,
+        )
+        print(
+            f"Patch approved:"
+            f"{review_result['approved']}"
+        )
+        print("Review issues:")
 
-            
+        if review_result["issues"]:
+            for issue_text in review_result["issues"]:
+                print(f"  - {issue_text}")
+        else:
+            print("  No issues found.") 
+        
+        if not review_result["approved"]:
+            return WorkflowResult(
+                success=False,
+                message=(
+                    "Patch review failed. "
+                ),
+                iteration=0,
+                test_output=output,
+            )
+        
+        if not self.config.apply_patch:
+            return WorkflowResult(
+                success=False,
+                message=(
+                    "JSON patch generated and approved,"
+                    "but patch application is disabled."
+                    ),
+                iteration=0,
+                test_output=output,
+            )
+        
+        print ("Applying JSON patch...")
+
+        try:
+            state.diff=self.patcher.apply(
+                repo=repo,
+                patch=state.patch,
+            )
+        except(
+            ValueError,
+            FileNotFoundError,
+        ) as exc:
+            return WorkflowResult(
+                success=False,
+                message=f"Patch application failed:{exc}",
+                iteration=1,
+                test_output=output,
+            )
+        
+        print("Patch applied successfully.")
+        print("Generated diff:")
+        print(state.diff)
 
         return WorkflowResult(
-            success=test_result.success,
-            message=(
-                "Repository scanned, symbols indexed, "
-        "and test failures analyzed."
-            ),
-            iteration=0,
-            test_output=output,
-        )
+    success=False,
+    message=(
+        "Patch applied successfully, "
+        "but verification has not run yet."
+    ),
+    iteration=1,
+    diff=state.diff,
+    test_output=output,
+)
 
     
   

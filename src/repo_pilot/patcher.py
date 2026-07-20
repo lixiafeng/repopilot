@@ -1,5 +1,7 @@
 import json
 from typing import Any
+import difflib
+from pathlib import Path
 
 from repo_pilot.provider import FakeProvider
 
@@ -120,6 +122,109 @@ Repository context:
                     f"the '{filed_name}'  filed."
 
                 )
+    
+    def apply(
+            self,
+            repo:Path,
+            patch:dict[str,Any]     
+    )->str:
+        
+        all_diffs:list[str]=[]
+
+        operations=patch.get("operations",[])
+
+        for operation in operations:
+            operation_type=operation["type"]
+
+            if operation_type!="replace_text":
+                raise ValueError(
+                    f"Unsupported patch iperation:{operation_type}"
+                )
+            
+            operation_diff=self._apply_replace_text(
+                repo=repo,
+                operation=operation,
+            )
+            all_diffs.append(operation_diff)
+
+        return "\n".join(all_diffs)
+    
+    def _apply_replace_text(
+            self,
+            repo:Path,
+            operation:dict[str,Any],
+    )->str:
+        
+        relative_path=Path(operation["path"])
+
+        target_path=repo/relative_path
+
+        resolved_repo=repo.resolve()
+        resolved_target=target_path.resolve()
+        print(f"resolved_repo: {resolved_repo}")
+        print(f"resolved_target: {resolved_target}")
+        try:
+
+            resolved_target.relative_to(resolved_repo)
+        except ValueError as exc:
+            raise ValueError(
+                f"Patch target is outside repository:"
+                f"{relative_path.as_posix()}"
+            )
+        
+        if not resolved_target.is_file():
+            raise ValueError(
+                f"Path target is not a file:"
+                f"{relative_path.as_posix()}"
+            )
+        
+        before=resolved_target.read_text(
+            encoding="utf-8",
+            errors="ignore",
+        )
+
+        old_text=operation["old"]
+        new_text=operation["new"]
+
+        occurrence_count=before.count(old_text)
+
+        if occurrence_count==0:
+            raise ValueError(
+                f"Old text not found in file:"
+                f"{relative_path.as_posix()}"
+            )
+        
+        if occurrence_count>1:
+            raise ValueError(
+                f"Old text found multiple times in file:"
+                f"{relative_path.as_posix()}"
+                f"replacement is ambingopus."
+            )
+        
+        after=before.replace(
+            old_text,
+            new_text,
+            1,
+        )
+
+        resolved_target.write_text(
+            after,
+            encoding="utf-8",
+        )
+
+        diff_lines=difflib.unified_diff(
+            before.splitlines(keepends=True),
+            after.splitlines(keepends=True),
+            fromfile=f"a/{relative_path.as_posix()}",
+            tofile=f"b/{relative_path.as_posix()}",
+
+        )
+
+        return "".join(diff_lines)
+
+
+
+
 
 
         
