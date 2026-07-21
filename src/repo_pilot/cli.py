@@ -9,7 +9,7 @@ app=typer.Typer(name="repo-pilot")
 def run(
     repo:Path=typer.Option(...,"--repo"),
     issue: str=typer.Option(...,"--issue"),
-    test_command: str=typer.Option("pytest -q","--test-command"),
+    test_command: str=typer.Option("python -m pytest -q","--test-command"),
     provider: str=typer.Option("fake","--provider"),
     model:str=typer.Option("fake-model","--model"),
     apply_patch:bool=typer.Option(True,"--aplply/--no-apply"),

@@ -11,6 +11,7 @@ from repo_pilot.provider import create_provider
 from repo_pilot.planner import PatchPlanner
 from repo_pilot.patcher import Patcher
 from repo_pilot.reviewer import PatchReviewer
+from repo_pilot.verifier import Verifier
 
 class BugfixWorkflow:
     def __init__(self,config: RepoPilotConfig):
@@ -33,6 +34,10 @@ class BugfixWorkflow:
             provider=self.provider,
         )
         self.reviewer=PatchReviewer()
+
+        self.verifier=Verifier(
+            commands=self.commands,
+            )
 
     def run(
             self,
@@ -256,15 +261,41 @@ class BugfixWorkflow:
         print("Generated diff:")
         print(state.diff)
 
+        print("Verifying applied patch...")
+
+        state.verification=self.verifier.verify(
+            repo=repo,
+            test_command=test_command,
+        )
+        print(  
+            f"Verification exit code: "
+            f"{state.verification['exit_code']}"
+        )
+
+        print("Verification output:")
+        print(state.verification["output"])
+
+# 测试通过后，整个 bug 修复任务才算成功。
+        if state.verification["success"]:
+            return WorkflowResult(
+                success=True,
+                message="Patch applied and verified successfully.",
+                iteration=1,
+                diff=state.diff,
+                test_output=state.verification["output"],
+            )
+                
+
+
         return WorkflowResult(
     success=False,
     message=(
-        "Patch applied successfully, "
-        "but verification has not run yet."
+        "Patch verification failed during "
+        f"{state.verification['stage']} stage."
     ),
     iteration=1,
     diff=state.diff,
-    test_output=output,
+    test_output=state.verification["output"],
 )
 
     
