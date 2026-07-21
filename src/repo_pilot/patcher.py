@@ -221,6 +221,65 @@ Repository context:
         )
 
         return "".join(diff_lines)
+    
+    def create_snapshot(
+            self,
+            repo:Path,
+            patch:dict[str,Any],
+    )->dict[str,str|None]:
+        
+        snapshot:dict[str,Any|None]={}
+        operations=patch.get("operations",[])
+
+        for operation in operations:
+
+            relative_path=Path(operation["path"])
+            target_path=(repo/relative_path).resolve()
+            resolved_repo=repo.resolve()
+
+            try:
+                target_path.relative_to(resolved_repo)
+            except ValueError as exc:
+                raise ValueError(
+                    "Snapshot target ia outside repository:"
+                    f"{relative_path.as_posix()}"
+                ) from exc
+            
+            path_text=relative_path.as_posix()
+            if target_path.exists():
+                snapshot[path_text]=target_path.read_text(
+                    encoding="utf-8",
+                    errors="ignore",
+                )
+            else:
+                snapshot[path_text]=None
+        return snapshot
+    
+    def restore_snapshot(
+            self,
+            repo:Path,
+            snapshot:dict[str,str|None],
+    )->None:
+        
+        for path_text,original_content in snapshot.items():
+            relative_path=Path(path_text)
+            target_path=repo/relative_path
+
+            if original_content is None:
+                if target_path.exist() and target_path.is_file():
+                    target_path.unlink()
+                
+                continue
+
+            target_path.parent.mkdir(
+                parents=True,
+                exist_ok=True,
+            )
+            target_path.write_text(
+                original_content,
+                encoding="utf-8",
+            )
+    
 
 
 

@@ -6,6 +6,7 @@ class RetryPolicy:
         "assertion_failure",
         "patch_apply_error",
         "unknown_failure",
+        "patch_review_error",
     }
 
     def classify(
@@ -19,6 +20,8 @@ class RetryPolicy:
             +"\n"
             +output
         ).lower()
+        if stage=="patch_review":
+            return "patch_review_error"
         
 
         if(
@@ -33,7 +36,7 @@ class RetryPolicy:
             or "syntax error" in combined_text
             or "indentationerror" in combined_text
         ):
-            return "syntex_error"
+            return "syntex_error" 
         
         if(
             "ModuleNotFoundError" in combined_text

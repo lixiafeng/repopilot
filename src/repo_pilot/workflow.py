@@ -12,6 +12,7 @@ from repo_pilot.planner import PatchPlanner
 from repo_pilot.patcher import Patcher
 from repo_pilot.reviewer import PatchReviewer
 from repo_pilot.verifier import Verifier
+from repo_pilot.retry import RetryPolicy
 
 class BugfixWorkflow:
     def __init__(self,config: RepoPilotConfig):
@@ -38,6 +39,7 @@ class BugfixWorkflow:
         self.verifier=Verifier(
             commands=self.commands,
             )
+        self.retry=RetryPolicy()
 
     def run(
             self,
@@ -128,175 +130,257 @@ class BugfixWorkflow:
         else:
             print("  No candidate files found.")
 
-        print("Building context pack...")
-        state.context_pack=self.context_builder.build(state)
-        print("ContextPack:")
-
-        print(f"  issue: {state.context_pack['issue']}")
-
-        print("  candidate files:")
-        for file_name in state.context_pack["candidate_files"]:
-            print(f"    - {file_name}")
-
-        print("  snippets:")    
-        for snippet in state.context_pack["snippets"]:
-            print(f"    file: {snippet['path']}")
-            print(f"    truncated: {snippet['truncated']}")
-            print("    content:")
-            print(snippet["content"])
-
-        print("  symbol hits:")
-        for symbol in state.context_pack["symbol_hits"]:
-            print(
-            f"    - {symbol['type']} "
-            f"{symbol['name']} "
-            f"({symbol['file']}:{symbol['line']})"
-            )
-            
-        print("Creating repair plan...")
-        state.plan=self.planner.plan(
-            context_pack=state.context_pack,
-        )
-        print("Repair plan:")
-        print(
-            f"  root cause: "
-            f"{state.plan['root_cause_hypothesis']}"
-        )
-
-        print("  files to inspect:")
-        for file_name in state.plan["files_to_inspect"]:
-            print(f"    - {file_name}")
-
-        print("  files to modify:")
-        for file_name in state.plan["files_to_modify"]:
-            print(f"    - {file_name}")
-
-        print(
-            f"  patch strategy: "
-            f"{state.plan['patch_strategy']}"
-        )
-
-        print("  verification commands:")
-        for command in state.plan["verification_commands"]:
-            print(f"    - {command}")
-
-        print("  risks:")
-        for risk in state.plan["risks"]:
-            print(f"    - {risk}")
-
-        print("Create JSON patch...")
-        state.patch=self.patcher.propose_patch(
-            context_pack=state.context_pack,
-            plan=state.plan,     
-        )
-        print("JSON patch:")
-        print(f"  notes: {state.patch.get('notes', '')}")
-        print("  operations:")
-        for operation in state.patch["operations"]:
-            print(f"    type: {operation['type']}")
-            print(f"    path: {operation['path']}")
-
-            print("    old:")
-            print(operation["old"])
-
-            print("    new:")
-            print(operation["new"])
-        
-        print("Reviewing JSON patch...")
-        review_result=self.reviewer.review(
-            patch=state.patch,
-        )
-        print(
-            f"Patch approved:"
-            f"{review_result['approved']}"
-        )
-        print("Review issues:")
-
-        if review_result["issues"]:
-            for issue_text in review_result["issues"]:
-                print(f"  - {issue_text}")
-        else:
-            print("  No issues found.") 
-        
-        if not review_result["approved"]:
+        if test_result.success:
             return WorkflowResult(
-                success=False,
+                success=True,
                 message=(
-                    "Patch review failed. "
+                    "Initial test command passed."
+                    "No patch was required."
                 ),
                 iteration=0,
                 test_output=output,
             )
         
-        if not self.config.apply_patch:
-            return WorkflowResult(
-                success=False,
-                message=(
-                    "JSON patch generated and approved,"
-                    "but patch application is disabled."
-                    ),
-                iteration=0,
-                test_output=output,
+        last_failure_output=output
+        last_diff=""
+        for iteration in range(1,self.config.max_iterations+1):
+            print()
+            print(
+                f"=====Repair iteration"
+                f"{iteration}/"
+                f"{self.config.max_iterations}====="
+            )
+            
+
+            print("Building context pack...")
+            state.context_pack=self.context_builder.build(state)
+     
+            
+            print("Creating repair plan...")
+            state.plan=self.planner.plan(
+                context_pack=state.context_pack,
             )
         
-        print ("Applying JSON patch...")
+            print("Create JSON patch...")
+            state.patch=self.patcher.propose_patch(
+                context_pack=state.context_pack,
+                plan=state.plan,     
+            )
+       
+            print("Reviewing JSON patch...")
+            review_result=self.reviewer.review(
+                patch=state.patch,
+            )
+            print(
+                f"Patch approved:"
+                f"{review_result['approved']}"
+            )
+        
+        
+            if not review_result["approved"]:
+                failure_type=(
+                    self.retry.classify(
+                    stage="patch_review",
+                    output="\n".join(
+                        review_result["issues"]
+                    ),
+                )
+                )
+                retry_allowed=(
+                    self.retry.should_retry(
+                    failure_type=failure_type,
+                    iteration=iteration,
+                    max_iterations=self.config.max_iterations,
+                )
+                )
+                state.attempts.append({
+                    "iteration":iteration,
+                    "stage":"patch_review",
+                    "failure_type": failure_type,
+                    "retry_allowed": retry_allowed,
+                    "issues": review_result["issues"],
+                })
+                print(
+                    f"Failure type: {failure_type}"
+                    f"Retry allowed: {retry_allowed}"
+                )
+                if retry_allowed:
+                    continue
 
-        try:
-            state.diff=self.patcher.apply(
+                return WorkflowResult(
+                    success=False,
+                    message=(
+                        "Patch review failed. "
+                    ),
+                    iteration=iteration,
+                    test_output=last_failure_output,
+                )
+            
+            if not self.config.apply_patch:
+                return WorkflowResult(
+                    success=False,
+                    message=(
+                        "JSON patch generated and approved,"
+                        "but patch application is disabled."
+                        ),
+                    iteration=iteration,
+                    test_output=last_failure_output,
+                )
+            
+            snapshot=self.patcher.create_snapshot(
                 repo=repo,
                 patch=state.patch,
             )
-        except(
-            ValueError,
-            FileNotFoundError,
-        ) as exc:
-            return WorkflowResult(
-                success=False,
-                message=f"Patch application failed:{exc}",
-                iteration=1,
-                test_output=output,
-            )
+            
+            print ("Applying JSON patch...")
+
+            try:
+                state.diff=self.patcher.apply(
+                    repo=repo,
+                    patch=state.patch,
+                )
+            except(
+                ValueError,
+                FileNotFoundError,
+            ) as exc:
+                self.patcher.restore_snapshot(
+                    repo=repo,
+                    snapshot=snapshot,
+                )
+            
+                failure_type=(self.retry.classify(
+                    stage="patch_apply",
+                    output="",
+                    error_message=str(exc),
+                )
+                )
+                retry_allowed=(self.retry.should_retry(
+                    failure_type=failure_type,
+                    iteration=iteration,
+                    max_iterations=self.config.max_iterations,
+                )
+                )
+
+                state.attempts.append({
+                    "iteration":iteration,
+                    "stage":"patch_apply",
+                    "failure_type":failure_type,
+                    "error":str(exc),
+                    "retry_allowed":retry_allowed,
+                })
+
+                print(f"Failure type: {failure_type}")
+                print(f"Retry allowed: {retry_allowed}")
+                if retry_allowed:
+                    continue
+                
+                return WorkflowResult(
+                    success=False,
+                    message=( f"Patch application failed: {exc}. "
+                f"Retry allowed: {retry_allowed}"),
+                    iteration=iteration,
+                    test_output=last_failure_output,
+                )
         
-        print("Patch applied successfully.")
-        print("Generated diff:")
-        print(state.diff)
+            print("Patch applied successfully.")
+            print("Generated diff:")
+            print(state.diff)
 
-        print("Verifying applied patch...")
+            print("Verifying applied patch...")
 
-        state.verification=self.verifier.verify(
-            repo=repo,
-            test_command=test_command,
-        )
-        print(  
-            f"Verification exit code: "
-            f"{state.verification['exit_code']}"
-        )
-
-        print("Verification output:")
-        print(state.verification["output"])
+            state.verification=self.verifier.verify(
+                repo=repo,
+                test_command=test_command,
+            )
+            print(  
+                f"Verification stage: "
+                f"{state.verification['stage']}"
+            )
+            print(
+                f"Verification exit code: "
+                f"{state.verification['exit_code']}"
+            )
+            print("Verification output:")
+            print(state.verification["output"])
 
 # 测试通过后，整个 bug 修复任务才算成功。
-        if state.verification["success"]:
-            return WorkflowResult(
-                success=True,
-                message="Patch applied and verified successfully.",
-                iteration=1,
-                diff=state.diff,
-                test_output=state.verification["output"],
+            if state.verification["success"]:
+                return WorkflowResult(
+                    success=True,
+                    message="Patch applied and verified successfully.",
+                    iteration=iteration,
+                    diff=state.diff,
+                    test_output=state.verification["output"],
+                )
+            
+            failure_type = self.retry_policy.classify(
+                stage=state.verification["stage"],
+                output=state.verification["output"],
             )
-                
 
+# 判断是否还有下一轮机会。
+            retry_allowed = (self.retry_policy.should_retry(
+                failure_type=failure_type,
+                iteration=1,
+                max_iterations=self.config.max_iterations,
+            )
+            )
 
+# 把本轮失败信息保存到 AgentState。
+            state.attempts.append(
+                {
+                    "iteration": iteration,
+                    "stage": state.verification["stage"],
+                    "failure_type": failure_type,
+                    "retry_allowed": retry_allowed,
+                    "verification": state.verification,
+                    "diff": state.diff,
+                }
+            )
+
+            last_failure_output=(
+                state.verification["output"]
+            )
+            last_diff=state.diff
+
+            print(f"Failure type: {failure_type}")
+            print(f"Retry allowed: {retry_allowed}")
+            self.patcher.restore_snapshot(
+                repo=repo,
+                snapshot=snapshot,
+            )
+
+            print(
+                "Repository restored to the state "
+                "before this iteration."
+            )
+
+            if retry_allowed:
+                continue
+
+            return WorkflowResult(
+                success=False,
+                message=(
+                    "Patch verification failed during "
+                    f"{state.verification['stage']} "
+                    "stage."
+                ),
+                iteration=iteration,
+                diff=last_diff,
+                test_output=last_failure_output,
+            )
+        
         return WorkflowResult(
-    success=False,
-    message=(
-        "Patch verification failed during "
-        f"{state.verification['stage']} stage."
-    ),
-    iteration=1,
-    diff=state.diff,
-    test_output=state.verification["output"],
-)
+            success=False,
+            message="Maximum repair iterations reached.",
+            iteration=self.config,
+            diff=last_diff,
+            test_output=last_failure_output,
+        )
+                        
+
+
+   
 
     
   
