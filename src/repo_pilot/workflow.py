@@ -13,6 +13,7 @@ from repo_pilot.patcher import Patcher
 from repo_pilot.reviewer import PatchReviewer
 from repo_pilot.verifier import Verifier
 from repo_pilot.retry import RetryPolicy
+from repo_pilot.trace import TraceRecorder    
 
 class BugfixWorkflow:
     def __init__(self,config: RepoPilotConfig):
@@ -40,6 +41,23 @@ class BugfixWorkflow:
             commands=self.commands,
             )
         self.retry=RetryPolicy()
+    def _finish(
+            self,
+            trace:TraceRecorder,
+            result:WorkflowResult,
+    )->WorkflowResult:
+        trace.add(
+            event_type="workflow_finished",
+            payload={
+                "success":result.success,
+                "message":result.message,
+                "iteration":result.iteration,
+                "diff":result.diff,
+            },
+        )
+        trace_path=trace.save()
+        print(f"Trace saved to {trace_path}")
+        return result
 
     def run(
             self,
@@ -48,6 +66,25 @@ class BugfixWorkflow:
             test_command:str,
     )->WorkflowResult:
         repo=repo.resolve()
+
+        trace=TraceRecorder(
+            trace_root=self.config.trace_dir,
+        )
+
+        trace.add(
+            event_type="workflow_started",
+            payload={
+                "repo":repo,
+                "issue":issue,
+                "test_command":test_command,
+                "provider":self.config.provider,
+                "model":self.config.model,
+                "apply_patch":self.config.apply_patch,
+                "max_iterations":self.config.max_iterations,
+            },
+
+        )
+
         state=AgentState(
             repo=repo,
             issue=issue,
@@ -62,6 +99,24 @@ class BugfixWorkflow:
 
         print("Scanner repository")
         state.repo_map=self.scanner.scan(repo)
+        trace.add(
+            event_type="repo_scanned",
+        payload={
+        "file_count": len(
+            state.repo_map["files"]
+        ),
+        "python_files": (
+            state.repo_map["python_files"]
+        ),
+        "test_files": (
+            state.repo_map["test_files"]
+        ),
+        "config_files": (
+            state.repo_map["config_files"]
+        ),
+    },
+        )
+
         print("Files")
         for file in state.repo_map["files"]:
             print(f"  -{file}")
@@ -76,8 +131,18 @@ class BugfixWorkflow:
 
         state.symbol_index=self.symbols_indexer.build(
             repo=repo,
-            python_files=state.repo_map["python_files"]
+            python_files=state.repo_map["python_files"],
         )
+        trace.add(
+            event_type="symbols_indexed",
+            payload={
+                "symbol_count": len(
+                    state.symbol_index
+                ),
+                "symbols": state.symbol_index,
+            },
+)
+
 
         print("Symbols:")
         for symbol in state.symbol_index:
@@ -95,6 +160,18 @@ class BugfixWorkflow:
             command=test_command,
             cwd=repo,
         )
+        trace.add(
+            event_type="initial_test_finished",
+            payload={
+                "success": test_result.success,
+                "exit_code": test_result.exit_code,
+                "duration_seconds": (
+                    test_result.duration_seconds
+                ),
+                "timeout": test_result.timeout,
+            },
+)
+
         output=test_result.stdout+test_result.stderr
 
         print(f"exit_code={test_result.exit_code}")
@@ -106,6 +183,17 @@ class BugfixWorkflow:
             result=test_result,
             repo=repo,
         )
+        trace.add(
+            event_type="failure_analyzed",
+            payload={
+                "failures": state.failures,
+                "candidates": [
+                    path.as_posix()
+                    for path in state.candidates
+                ],
+            },
+        )
+
         print("Failures:")
         if state.failures:
             for failure in state.failures:
@@ -131,19 +219,30 @@ class BugfixWorkflow:
             print("  No candidate files found.")
 
         if test_result.success:
-            return WorkflowResult(
-                success=True,
-                message=(
+            return self._finish(
+                trace=trace,
+                result=WorkflowResult(
+                    success=True,
+                    message=(
                     "Initial test command passed."
                     "No patch was required."
                 ),
-                iteration=0,
-                test_output=output,
+                    iteration=0,
+                    test_output=output,
+            ),
             )
+        
+
         
         last_failure_output=output
         last_diff=""
         for iteration in range(1,self.config.max_iterations+1):
+            trace.add(
+            event_type="iteration_started",
+            payload={
+                "iteration": iteration,
+            },
+        )
             print()
             print(
                 f"=====Repair iteration"
@@ -154,11 +253,33 @@ class BugfixWorkflow:
 
             print("Building context pack...")
             state.context_pack=self.context_builder.build(state)
-     
-            
+            trace.add(
+                event_type="context_built",
+                payload={
+                    "iteration":iteration,
+                    "candidate_files":(
+                        state.context_pack["candidate_files"]
+                    ),
+                    "snippet_count":len(
+                        state.context_pack["snippets"]
+                    ),
+                    "previous_attept_count":len(
+                        state.context_pack[
+                            "previous_attempts"
+                        ]
+                    ),
+                },
+            )
             print("Creating repair plan...")
             state.plan=self.planner.plan(
                 context_pack=state.context_pack,
+            )
+            trace.add(
+                event_type="plan_created",
+                payload={
+                    "iteration":iteration,
+                    "plan":state.plan,
+                },
             )
         
             print("Create JSON patch...")
@@ -166,11 +287,30 @@ class BugfixWorkflow:
                 context_pack=state.context_pack,
                 plan=state.plan,     
             )
+            trace.add(
+                event_type="patch_created",
+                payload={
+                    "iteration": iteration,
+                    "patch": state.patch,
+                },
+            )
+
        
             print("Reviewing JSON patch...")
             review_result=self.reviewer.review(
                 patch=state.patch,
             )
+            trace.add(
+                event_type="patch_reviewed",
+                payload={
+                    "iteration": iteration,
+                    "approved": (
+                        review_result["approved"]
+                    ),
+                    "issues": review_result["issues"],
+                },
+            )
+            
             print(
                 f"Patch approved:"
                 f"{review_result['approved']}"
@@ -207,24 +347,30 @@ class BugfixWorkflow:
                 if retry_allowed:
                     continue
 
-                return WorkflowResult(
-                    success=False,
-                    message=(
-                        "Patch review failed. "
+                return self._finish(
+                    trace=trace,
+                    result=WorkflowResult(
+                        success=False,
+                        message=(
+                            "Patch review failed. "
+                        ),
+                        iteration=iteration,
+                        test_output=last_failure_output,
                     ),
-                    iteration=iteration,
-                    test_output=last_failure_output,
                 )
             
             if not self.config.apply_patch:
-                return WorkflowResult(
-                    success=False,
-                    message=(
-                        "JSON patch generated and approved,"
-                        "but patch application is disabled."
-                        ),
-                    iteration=iteration,
-                    test_output=last_failure_output,
+                return self._finish(
+                    trace=trace,
+                    result=WorkflowResult(
+                        success=False,
+                        message=(
+                            "JSON patch generated and approved,"
+                            "but patch application is disabled."
+                            ),
+                        iteration=iteration,
+                        test_output=last_failure_output,
+                    ),
                 )
             
             snapshot=self.patcher.create_snapshot(
@@ -238,6 +384,13 @@ class BugfixWorkflow:
                 state.diff=self.patcher.apply(
                     repo=repo,
                     patch=state.patch,
+                )
+                trace.add(
+                    event_type="patch_applied",
+                    payload={
+                        "iteration": iteration,
+                        "diff": state.diff,
+                    },
                 )
             except(
                 ValueError,
@@ -274,12 +427,16 @@ class BugfixWorkflow:
                 if retry_allowed:
                     continue
                 
-                return WorkflowResult(
-                    success=False,
-                    message=( f"Patch application failed: {exc}. "
-                f"Retry allowed: {retry_allowed}"),
-                    iteration=iteration,
-                    test_output=last_failure_output,
+                return self._finish(
+                    trace=trace,
+                    result=WorkflowResult(
+                        success=False,
+                        message=(
+                            "Patch application failed: {exc}. "
+                            f"Retry allowed: {retry_allowed}"),
+                        iteration=iteration,
+                        diff=last_diff,
+                ),
                 )
         
             print("Patch applied successfully.")
@@ -291,6 +448,21 @@ class BugfixWorkflow:
             state.verification=self.verifier.verify(
                 repo=repo,
                 test_command=test_command,
+            )
+            trace.add(
+                event_type="verification_finished",
+                payload={
+                    "iteration": iteration,
+                    "success": (
+                        state.verification["success"]
+                    ),
+                    "stage": (
+                        state.verification["stage"]
+                    ),
+                    "exit_code": (
+                        state.verification["exit_code"]
+                    ),
+                },
             )
             print(  
                 f"Verification stage: "
@@ -305,12 +477,15 @@ class BugfixWorkflow:
 
 # 测试通过后，整个 bug 修复任务才算成功。
             if state.verification["success"]:
-                return WorkflowResult(
+                return self._finish(
+                    trace=trace,
+                    result=WorkflowResult(
                     success=True,
                     message="Patch applied and verified successfully.",
                     iteration=iteration,
                     diff=state.diff,
                     test_output=state.verification["output"],
+                ),
                 )
             
             failure_type = self.retry_policy.classify(
@@ -349,6 +524,12 @@ class BugfixWorkflow:
                 repo=repo,
                 snapshot=snapshot,
             )
+            trace.add(
+                event_type="snapshot_restored",
+                payload={
+                    "iteration": iteration,
+                },
+            )
 
             print(
                 "Repository restored to the state "
@@ -358,24 +539,30 @@ class BugfixWorkflow:
             if retry_allowed:
                 continue
 
-            return WorkflowResult(
-                success=False,
-                message=(
-                    "Patch verification failed during "
-                    f"{state.verification['stage']} "
-                    "stage."
+            return self._finish(
+                trace=trace,
+                result=WorkflowResult(
+                    success=False,
+                    message=(
+                        "Patch verification failed during "
+                        f"{state.verification['stage']} "
+                        "stage."
+                    ),
+                    iteration=iteration,
+                    diff=last_diff,
+                    test_output=last_failure_output,
                 ),
-                iteration=iteration,
-                diff=last_diff,
-                test_output=last_failure_output,
             )
         
-        return WorkflowResult(
-            success=False,
-            message="Maximum repair iterations reached.",
-            iteration=self.config,
-            diff=last_diff,
-            test_output=last_failure_output,
+        return self._finish(
+            trace=trace,
+            result=WorkflowResult(
+                success=False,
+                message="Maximum repair iterations reached.",
+                iteration=self.config,
+                diff=last_diff,
+                test_output=last_failure_output,
+            ),
         )
                         
 
