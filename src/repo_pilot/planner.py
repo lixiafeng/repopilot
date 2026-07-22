@@ -2,6 +2,7 @@ import json
 from typing import Any
 
 from repo_pilot.provider import FakeProvider
+from repo_pilot.cost import CostTracker
 
 class PatchPlanner:
     def __init__(self,provider:FakeProvider):
@@ -12,6 +13,7 @@ class PatchPlanner:
     def plan(
             self,
             context_pack:dict[str,Any],
+            cost_tracker:CostTracker|None=None,
     )->dict[str,Any]:
         
         context_json=json.dumps(
@@ -40,6 +42,11 @@ Repository context:
 """.strip()
         
         response=self.provider.complete(prompt)
+        if cost_tracker is not None:
+            cost_tracker.record(
+                call_name="repair_plan",
+                response=response,
+            )
 
         try:
             plan_data=json.loads(response.content)  ##把 JSON 字符串转换成 Python 字典。 response.content 当前是 JSON 格式的字符串。

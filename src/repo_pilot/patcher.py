@@ -4,6 +4,7 @@ import difflib
 from pathlib import Path
 
 from repo_pilot.provider import FakeProvider
+from repo_pilot.cost import CostTracker
 
 class Patcher:
 
@@ -14,6 +15,7 @@ class Patcher:
             self,
             context_pack:dict[str,Any],
             plan:dict[str,Any],     
+            cost_tracker:CostTracker|None=None,
     )->dict[str,Any]:
         
         context_json=json.dumps(
@@ -61,6 +63,11 @@ Repository context:
 {context_json}
 """.strip()
         response=self.provider.complete(prompt)
+        if cost_tracker is not None:
+            cost_tracker.record(
+                call_name="json_patch",
+                response=response,
+            )
 
         try:
             patch_data=json.loads(response.content)

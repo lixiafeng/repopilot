@@ -14,6 +14,7 @@ from repo_pilot.reviewer import PatchReviewer
 from repo_pilot.verifier import Verifier
 from repo_pilot.retry import RetryPolicy
 from repo_pilot.trace import TraceRecorder    
+from repo_pilot.cost import CostTracker
 
 class BugfixWorkflow:
     def __init__(self,config: RepoPilotConfig):
@@ -45,7 +46,14 @@ class BugfixWorkflow:
             self,
             trace:TraceRecorder,
             result:WorkflowResult,
+            cost_tracker:CostTracker,
     )->WorkflowResult:
+        cost_summary=cost_tracker.summary()
+        trace.add(
+            event_type="cost_summary",
+            payload=cost_summary,
+        )
+
         trace.add(
             event_type="workflow_finished",
             payload={
@@ -55,7 +63,11 @@ class BugfixWorkflow:
                 "diff":result.diff,
             },
         )
+        cost_path=cost_tracker.save(
+            run_dir=trace.run_dir
+        )
         trace_path=trace.save()
+        print(f"Cost saved to: {cost_path}")
         print(f"Trace saved to {trace_path}")
         return result
 
@@ -70,6 +82,8 @@ class BugfixWorkflow:
         trace=TraceRecorder(
             trace_root=self.config.trace_dir,
         )
+
+        cost_tracker=CostTracker()
 
         trace.add(
             event_type="workflow_started",
@@ -220,6 +234,7 @@ class BugfixWorkflow:
 
         if test_result.success:
             return self._finish(
+                cost_tracker=cost_tracker,
                 trace=trace,
                 result=WorkflowResult(
                     success=True,
@@ -273,6 +288,7 @@ class BugfixWorkflow:
             print("Creating repair plan...")
             state.plan=self.planner.plan(
                 context_pack=state.context_pack,
+                cost_tracker=cost_tracker,
             )
             trace.add(
                 event_type="plan_created",
@@ -286,6 +302,7 @@ class BugfixWorkflow:
             state.patch=self.patcher.propose_patch(
                 context_pack=state.context_pack,
                 plan=state.plan,     
+                cost_tracker=cost_tracker,
             )
             trace.add(
                 event_type="patch_created",
@@ -348,6 +365,7 @@ class BugfixWorkflow:
                     continue
 
                 return self._finish(
+                    cost_tracker=cost_tracker,
                     trace=trace,
                     result=WorkflowResult(
                         success=False,
@@ -361,6 +379,7 @@ class BugfixWorkflow:
             
             if not self.config.apply_patch:
                 return self._finish(
+                    cost_tracker=cost_tracker,
                     trace=trace,
                     result=WorkflowResult(
                         success=False,
@@ -428,6 +447,7 @@ class BugfixWorkflow:
                     continue
                 
                 return self._finish(
+                    cost_tracker=cost_tracker,
                     trace=trace,
                     result=WorkflowResult(
                         success=False,
@@ -478,6 +498,7 @@ class BugfixWorkflow:
 # 测试通过后，整个 bug 修复任务才算成功。
             if state.verification["success"]:
                 return self._finish(
+                    cost_tracker=cost_tracker,
                     trace=trace,
                     result=WorkflowResult(
                     success=True,
@@ -540,6 +561,7 @@ class BugfixWorkflow:
                 continue
 
             return self._finish(
+                cost_tracker=cost_tracker,
                 trace=trace,
                 result=WorkflowResult(
                     success=False,
@@ -555,6 +577,7 @@ class BugfixWorkflow:
             )
         
         return self._finish(
+            cost_tracker=cost_tracker,
             trace=trace,
             result=WorkflowResult(
                 success=False,
