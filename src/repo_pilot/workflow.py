@@ -15,6 +15,7 @@ from repo_pilot.verifier import Verifier
 from repo_pilot.retry import RetryPolicy
 from repo_pilot.trace import TraceRecorder    
 from repo_pilot.cost import CostTracker
+from repo_pilot.output import OutputWriter
 
 class BugfixWorkflow:
     def __init__(self,config: RepoPilotConfig):
@@ -42,6 +43,8 @@ class BugfixWorkflow:
             commands=self.commands,
             )
         self.retry=RetryPolicy()
+
+        self.output_writer=OutputWriter()
     def _finish(
             self,
             trace:TraceRecorder,
@@ -60,15 +63,35 @@ class BugfixWorkflow:
                 "success":result.success,
                 "message":result.message,
                 "iteration":result.iteration,
-                "diff":result.diff,
+                "diff":bool(
+                    result.diff.strip()
+                ),
             },
         )
         cost_path=cost_tracker.save(
             run_dir=trace.run_dir
         )
+
+        output_paths=self.output_writer.save(
+            run_dir=trace.run_dir,
+            result=result,
+            cost_summary=cost_summary,
+
+        )
         trace_path=trace.save()
         print(f"Cost saved to: {cost_path}")
-        print(f"Trace saved to {trace_path}")
+        print(
+            f"Summary saved to: "
+            f"{output_paths['summary']}"
+        )
+        if output_paths["diff"] is not None:
+            print(
+                f"Diff saved to: "
+                f"{output_paths['diff']}"
+            )
+
+        print(f"Trace saved to: {trace_path}")
+        
         return result
 
     def run(
