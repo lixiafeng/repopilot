@@ -1,11 +1,11 @@
 import json
 from typing import Any
 
-from repo_pilot.provider import FakeProvider
+from repo_pilot.provider import Provider
 from repo_pilot.cost import CostTracker
 
 class PatchPlanner:
-    def __init__(self,provider:FakeProvider):
+    def __init__(self,provider:Provider):
         self.provider=provider
 
 

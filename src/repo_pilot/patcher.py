@@ -3,12 +3,12 @@ from typing import Any
 import difflib
 from pathlib import Path
 
-from repo_pilot.provider import FakeProvider
+from repo_pilot.provider import Provider
 from repo_pilot.cost import CostTracker
 
 class Patcher:
 
-    def __init__(self,provider:FakeProvider):
+    def __init__(self,provider:Provider):
         self.provider=provider
 
     def propose_patch(
