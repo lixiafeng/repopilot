@@ -6,6 +6,8 @@ from pathlib import Path
 from repo_pilot.provider import Provider
 from repo_pilot.cost import CostTracker
 
+from repo_pilot.structured import complete_json_object
+
 class Patcher:
 
     def __init__(self,provider:Provider):
@@ -62,22 +64,13 @@ Repair plan:
 Repository context:
 {context_json}
 """.strip()
-        response=self.provider.complete(prompt)
-        if cost_tracker is not None:
-            cost_tracker.record(
-                call_name="json_patch",
-                response=response,
-            )
-
-        try:
-            patch_data=json.loads(response.content)
-
-        except  json.JSONDecodeError as exc:
-            raise ValueError(
-                "Provider returned invalid JSON patch.\n"
-                f"Original response:\n{response.context}"
-            ) from exc
-        
+        patch_data = complete_json_object(
+            provider=self.provider,
+            prompt=prompt,
+            call_name="json_patch",
+            output_description="JSON patch",
+            cost_tracker=cost_tracker,
+        )
         if not isinstance(patch_data,dict):
             raise ValueError(
                 "Patch must be a JSON object."
@@ -85,7 +78,7 @@ Repository context:
         
         if "operations" not in patch_data:
             raise ValueError(
-                "Patch is missing the 'operations' filed."
+                "Patch is missing the 'operations' field."
             )
         operations=patch_data["operations"]
 
