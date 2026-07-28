@@ -2,6 +2,7 @@ from dataclasses import dataclass
 import os
 from typing import Protocol
 import httpx
+import time
 
 @dataclass
 class ModelResponse:
@@ -80,12 +81,23 @@ class FakeProvider:
             )
 
 class OpenAICompatibleProvider:
+    RETRYABLE_STATUS_CODES={
+        408,
+        429,
+        500,
+        502,
+        503,
+        504,
+    }
     def __init__(
             self,
             api_key:str,
             base_url:str,
             model:str,
             timeout_sec:float=120.0,
+            max_retries:int=2, #最多发送3次请求
+            backoff_base_sec:float=1.0,
+            transport:httpx.BaseTransport|None=None,
     )->None:
         if not api_key.strip():
             raise ValueError(
@@ -105,12 +117,117 @@ class OpenAICompatibleProvider:
         self.base_url=base_url.rstrip("/")
         self.model=model
         self.timeout_sec=timeout_sec
+        if max_retries<0:
+            raise ValueError(
+                "max_retries must be at least 0."
+            )
+        if backoff_base_sec<0:
+            raise ValueError(
+                "backoff_base_sec must be not be negative"
+            )
+        self.max_retries=max_retries
+        self.backoff_base_sec=backoff_base_sec
+        self.transport = transport
 
     def complete(
             self,
             prompt:str,         
     )->ModelResponse:
+        last_error:Exception |None=None
+        with httpx.Client(
+            timeout=self.timeout_sec,
+            transport=self.transport,
+        )as client:
+            for attempt in range(self.max_retries+1):
+                try:
+                    return self._complete_once(
+                        client=client,
+                        prompt=prompt,
+                    )
+                except httpx.HTTPStatusError as exc:
+                    last_error=exc
 
+                    status_code=(
+                        exc.response.status_code
+                    )
+                    retryable=(
+                        status_code
+                        in self.RETRYABLE_STATUS_CODES
+                    )
+                    if (
+                        not retryable
+                        or attempt>=self.max_retries
+                    ):
+                        break
+
+                    self._wait_before_retry(
+                        attempt=attempt,
+                        reason=(
+                            f"HTTP{status_code}"
+                        )
+                    )
+                except httpx.TimeoutException as exc:
+                    last_error=exc
+
+                    if attempt>=self.max_retries:
+                        break
+
+                    self._wait_before_retry(
+                        attempt=attempt,
+                        reason="request timeout",
+                    )
+                except httpx.RequestError as exc:
+                    last_error=exc
+                    
+                    if attempt>=self.max_retries:
+                        break
+
+                    self._wait_before_retrey(
+                        attempt=attempt,
+                        reason=str(exc),
+                    )
+
+        if isinstance(
+            last_error,
+            httpx.HTTPStatusError ,
+        ):
+            status_code = (
+                last_error.response.status_code
+            )
+
+            response_text = (
+                last_error.response.text[:1000]
+            )
+
+            raise ProviderError(
+                "Model API returned HTTP "
+                f"{status_code}: {response_text}"
+            ) from last_error
+        if isinstance(
+            last_error,
+            httpx.TimeoutException,
+        ):
+            raise ProviderError(
+                "Model request timed out after "
+                f"{self.timeout_sec} seconds."
+            ) from last_error
+
+        if isinstance(
+            last_error,
+            httpx.RequestError,
+        ):
+            raise ProviderError(
+                f"Model request failed: {last_error}"
+            ) from last_error
+
+        raise ProviderError(
+            "Model request failed for an unknown reason."
+        )
+    def _complete_once(
+            self,
+            client:httpx.Client,
+            prompt:str,
+    )->ModelResponse:
         url=(
             f"{self.base_url}/chat/completions"
         )
@@ -141,46 +258,26 @@ class OpenAICompatibleProvider:
             ],
             "temperature":0,
         }
-        try:
-            with httpx.Client(
-                timeout=self.timeout_sec,
-            )as client:
-                response=client.post(
-                    url=url,
-                    headers=headers,
-                    json=payload,
-                )
-
-                response.raise_for_status()
-        except httpx.TimeoutException as exc:
-            raise ProviderError(
-                "Model request timed out after"
-                f"{self.timeout_sec}seconds."
-            )from exc
-
-        except httpx.HTTPStatusError as exc:
-            status_code=(
-                exc.response.status_code
-            )
-            response_text=(
-                exc.response.text[:1000]
-            )
-            raise ProviderError(
-                "Model API returned HTTP"
-                f"{status_code}:{response_text}"
-            )from exc
         
-        except httpx.RequestError as exc:
-            raise ProviderError (
-                f"Model request failed:{exc}"
-            )from exc
+        response=client.post(
+            url=url,
+            headers=headers,
+            json=payload,
+        )
 
+        response.raise_for_status()
         try:
             data=response.json()
+
         except ValueError as exc:
             raise ProviderError(
                 "Model API did not return valid JSON."
             )from exc
+
+        if not isinstance(data,dict):
+            raise ProviderError(
+                "Model API response must be a JSON object."
+            )
 
         try:
             content=(
@@ -231,6 +328,25 @@ class OpenAICompatibleProvider:
             output_tokens=output_tokens,
             estimated_cost=0.0,
         )
+
+    def _wait_before_retry(
+            self,
+            attempt:int,
+            reason:str,
+    )->None:
+        delay=(
+            self.backoff_base_sec*(2**attempt)
+        )
+        print(
+        "Model request failed temporarily. "
+        f"Reason: {reason}. "
+        f"Retrying in {delay:.1f} seconds." 
+    )
+
+        time.sleep(delay)
+
+
+        
 def _require_env(name:str)->str:
     value=os.getenv(name)
     if value is None or not value.strip():
