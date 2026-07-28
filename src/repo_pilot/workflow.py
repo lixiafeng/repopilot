@@ -16,6 +16,8 @@ from repo_pilot.retry import RetryPolicy
 from repo_pilot.trace import TraceRecorder    
 from repo_pilot.cost import CostTracker
 from repo_pilot.output import OutputWriter
+import traceback
+from repo_pilot.provider import ProviderError
 
 class BugfixWorkflow:
     def __init__(self,config: RepoPilotConfig):
@@ -98,14 +100,18 @@ class BugfixWorkflow:
             self,
             repo:Path,
             issue:str,
-            test_command:str,
+             test_command:str,
     )->WorkflowResult:
         repo=repo.resolve()
-
+        state=AgentState(
+                repo=repo,
+                issue=issue,
+                test_command=test_command,
+            ) 
+        
         trace=TraceRecorder(
-            trace_root=self.config.trace_dir,
-        )
-
+                trace_root=self.config.trace_dir,
+            )
         cost_tracker=CostTracker()
 
         trace.add(
@@ -121,20 +127,110 @@ class BugfixWorkflow:
             },
 
         )
+        try:
+            return self._run_pipeline(
+                repo=repo,
+                issue=issue,
+                test_command=test_command,
+                state=state,
+                trace=trace,
+                cost_tracker=cost_tracker,
+            )
+        except(
+            ProviderError,
+            ValueError,
+            OSError,
+        )as exc:
+            trace.add(
+                event_type="workflow_error",
+                payload={
+                    "stage":state.current_stage,
+                    "iteration":state.iteration,
+                    "error_type":(
+                        type(exc).__name__
+                    ),
+                    "message":str(exc),
+                    "traceback":(
+                        traceback.format_exc()
+                    ),
+                },
+            )
+            return self._finish(
+                trace=trace,
+                cost_tracker=cost_tracker,
+                result=WorkflowResult(
+                    success=False,
+                    message=(
+                        "Workflow failed during"
+                        f"{state.current_stage}:{exc}"
+                    ),
+                    iteration=state.iteration,
+                    diff=state.diff,
+                    test_output=(
+                        state.last_test_output
+                    ),
+                ),
 
-        state=AgentState(
-            repo=repo,
-            issue=issue,
-            test_command=test_command,
-        )
+            )
+        except Exception as exc:
+        # 这里捕获没有预料到的程序错误，
+        # 例如 AttributeError、TypeError、KeyError。
+        #
+        # Exception 不会捕获 KeyboardInterrupt，
+        # 所以用户按 Ctrl+C 仍然可以中断程序。
+
+            trace.add(
+                event_type="workflow_error",
+                payload={
+                    "stage": state.current_stage,
+                    "iteration": state.iteration,
+                    "error_type": (
+                        type(exc).__name__
+                    ),
+                    "message": str(exc),
+                    "unexpected": True,
+                    "traceback": (
+                        traceback.format_exc()
+                    ),
+                },
+            )
+
+            return self._finish(
+                trace=trace,
+                cost_tracker=cost_tracker,
+                result=WorkflowResult(
+                    success=False,
+                    message=(
+                        "Unexpected workflow error during "
+                        f"{state.current_stage}: "
+                        f"{type(exc).__name__}: {exc}"
+                    ),
+                    iteration=state.iteration,
+                    diff=state.diff,
+                    test_output=(
+                        state.last_test_output
+                    ),
+                ),
+            )
         
 
+    def _run_pipeline(
+            self,
+            repo:Path,
+            issue:str,
+            test_command:str,
+            state:AgentState,
+            trace:TraceRecorder,
+            cost_tracker:CostTracker,
+    )->WorkflowResult:
+    
         print("AgentState started")
         print(f"repo={repo}")
         print(f"issue={issue}")
         
 
         print("Scanner repository")
+        state.current_stage="repo_scan"
         state.repo_map=self.scanner.scan(repo)
         trace.add(
             event_type="repo_scanned",
@@ -165,7 +261,7 @@ class BugfixWorkflow:
         print("Test Files")
         for file in state.repo_map["test_files"]:
             print(f"  -{file}")
-
+        state.current_stage = "symbol_index"
         state.symbol_index=self.symbols_indexer.build(
             repo=repo,
             python_files=state.repo_map["python_files"],
@@ -193,6 +289,7 @@ class BugfixWorkflow:
 
 
         print("Running initial test command...")
+        state.current_stage = "initial_test"
         test_result=self.commands.run(
             command=test_command,
             cwd=repo,
@@ -210,12 +307,14 @@ class BugfixWorkflow:
 )
 
         output=test_result.stdout+test_result.stderr
+        state.last_test_output=output
 
         print(f"exit_code={test_result.exit_code}")
         print(f"duration_seconds={test_result.duration_seconds:.2f}")
         print(output)
 
         print("Analyzing test failures...")
+        state.current_stage = "failure_analysis"
         state.failures,state.candidates=self.failure_analyzer.analyze(
             result=test_result,
             repo=repo,
@@ -275,6 +374,7 @@ class BugfixWorkflow:
         last_failure_output=output
         last_diff=""
         for iteration in range(1,self.config.max_iterations+1):
+            state.iteration = iteration
             trace.add(
             event_type="iteration_started",
             payload={
@@ -290,6 +390,7 @@ class BugfixWorkflow:
             
 
             print("Building context pack...")
+            state.current_stage = "context_build"
             state.context_pack=self.context_builder.build(state)
             trace.add(
                 event_type="context_built",
@@ -309,6 +410,7 @@ class BugfixWorkflow:
                 },
             )
             print("Creating repair plan...")
+            state.current_stage = "repair_plan"
             state.plan=self.planner.plan(
                 context_pack=state.context_pack,
                 cost_tracker=cost_tracker,
@@ -322,6 +424,7 @@ class BugfixWorkflow:
             )
         
             print("Create JSON patch...")
+            state.current_stage = "patch_generation"
             state.patch=self.patcher.propose_patch(
                 context_pack=state.context_pack,
                 plan=state.plan,     
@@ -337,6 +440,7 @@ class BugfixWorkflow:
 
        
             print("Reviewing JSON patch...")
+            state.current_stage = "patch_review"
             review_result=self.reviewer.review(
                 patch=state.patch,
             )
@@ -423,6 +527,7 @@ class BugfixWorkflow:
             print ("Applying JSON patch...")
 
             try:
+                state.current_stage = "patch_apply"
                 state.diff=self.patcher.apply(
                     repo=repo,
                     patch=state.patch,
@@ -487,7 +592,7 @@ class BugfixWorkflow:
             print(state.diff)
 
             print("Verifying applied patch...")
-
+            state.current_stage = "verification"
             state.verification=self.verifier.verify(
                 repo=repo,
                 test_command=test_command,
@@ -520,6 +625,7 @@ class BugfixWorkflow:
 
 # 测试通过后，整个 bug 修复任务才算成功。
             if state.verification["success"]:
+                state.current_stage = "finished"
                 return self._finish(
                     cost_tracker=cost_tracker,
                     trace=trace,
@@ -564,6 +670,7 @@ class BugfixWorkflow:
 
             print(f"Failure type: {failure_type}")
             print(f"Retry allowed: {retry_allowed}")
+            state.current_stage = "rollback"
             self.patcher.restore_snapshot(
                 repo=repo,
                 snapshot=snapshot,

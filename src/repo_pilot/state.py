@@ -7,6 +7,13 @@ class AgentState:
     repo: Path
     issue: str
     test_command: str
+    
+    current_stage:str="initialization"
+    iteration:int=0
+    last_test_output:str=""
+
+
+
     repo_map: dict[str,Any]=field(default_factory=dict)
     symbol_index:list[dict[str,Any]]=field(default_factory=list)
 

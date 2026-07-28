@@ -21,13 +21,23 @@ def run(
         apply_patch=apply_patch,
         max_iterations=max_iterations,
     )
+    try:
+        workflow=BugfixWorkflow(config)
+        result=workflow.run(
+            repo=repo,
+            issue=issue,
+            test_command=test_command,
+        )
+    except Exception as exc:
+        typer.echo(
+            (
+                "RepoPilot startup failed: "
+            f"{type(exc).__name__}: {exc}"
+            ),
+            err=True,
 
-    workflow=BugfixWorkflow(config)
-    result=workflow.run(
-        repo=repo,
-        issue=issue,
-        test_command=test_command,
-    )
+        )
+        raise typer.Exit(code=1) from exc
     if result.success:
         typer.echo("SUCCESS")
     else:
