@@ -312,6 +312,20 @@ class BugfixWorkflow:
         print(f"exit_code={test_result.exit_code}")
         print(f"duration_seconds={test_result.duration_seconds:.2f}")
         print(output)
+        if test_result.success:
+                return self._finish(
+                    cost_tracker=cost_tracker,
+                    trace=trace,
+                    result=WorkflowResult(
+                        success=True,
+                        message=(
+                        "Initial test command passed."
+                        "No patch was required."
+                    ),
+                        iteration=0,
+                        test_output=output,
+                ),
+                )
 
         print("Analyzing test failures...")
         state.current_stage = "failure_analysis"
@@ -354,20 +368,7 @@ class BugfixWorkflow:
         else:
             print("  No candidate files found.")
 
-        if test_result.success:
-            return self._finish(
-                cost_tracker=cost_tracker,
-                trace=trace,
-                result=WorkflowResult(
-                    success=True,
-                    message=(
-                    "Initial test command passed."
-                    "No patch was required."
-                ),
-                    iteration=0,
-                    test_output=output,
-            ),
-            )
+       
         
 
         
@@ -597,6 +598,9 @@ class BugfixWorkflow:
                 repo=repo,
                 test_command=test_command,
             )
+            state.last_test_output = (
+                state.verification["output"]
+            )
             trace.add(
                 event_type="verification_finished",
                 payload={
@@ -638,7 +642,7 @@ class BugfixWorkflow:
                 ),
                 )
             
-            failure_type = self.retry_policy.classify(
+            failure_type = self.retry.classify(
                 stage=state.verification["stage"],
                 output=state.verification["output"],
             )
@@ -646,7 +650,7 @@ class BugfixWorkflow:
 # 判断是否还有下一轮机会。
             retry_allowed = (self.retry_policy.should_retry(
                 failure_type=failure_type,
-                iteration=1,
+                iteration=iteration,
                 max_iterations=self.config.max_iterations,
             )
             )
@@ -712,7 +716,7 @@ class BugfixWorkflow:
             result=WorkflowResult(
                 success=False,
                 message="Maximum repair iterations reached.",
-                iteration=self.config,
+                iteration=state.iteration,
                 diff=last_diff,
                 test_output=last_failure_output,
             ),
