@@ -1,0 +1,30 @@
+{
+  "total_cases": 2,
+  "passed_cases": 1,
+  "failed_cases": 1,
+  "pass_rate": 0.5,
+  "average_iteration": 0.5,
+  "total_duration_seconds": 12.4685,
+  "cases": [
+    {
+      "name": "divide_by_zero",
+      "success": true,
+      "iteration": 1,
+      "message": "Patch applied and verified successfully.",
+      "duration_seconds": 11.7694,
+      "diff": "--- a/calculator.py\n+++ b/calculator.py\n@@ -1,2 +1,4 @@\n def divide(a,b):\n+    if b == 0:\n+        raise ValueError(\"Cannot divide by zero\")\n     return a / b\n",
+      "test_output": "..                                                                       [100%]\n2 passed in 0.01s\n",
+      "source_repo": "D:\\repopilot-handwrite\\examples\\buggy_calculator"
+    },
+    {
+      "name": "off_by_one_count",
+      "success": false,
+      "iteration": 0,
+      "message": "Unexpected workflow error during failure_analysis: UnboundLocalError: cannot access local variable 'exception_text' where it is not associated with a value",
+      "duration_seconds": 0.6978,
+      "diff": "",
+      "test_output": "FF                                                                       [100%]\n================================== FAILURES ===================================\n___________________________ test_count_three_items ____________________________\n\n    def test_count_three_items() -> None:\n        \"\"\"三个元素的数量应该是 3。\"\"\"\n    \n        result = count_items(\n            [\"apple\", \"banana\", \"orange\"]\n        )\n    \n>       assert result == 3\nE       assert 2 == 3\n\ntests\\test_counter.py:11: AssertionError\n___________________________ test_count_empty_items ____________________________\n\n    def test_count_empty_items() -> None:\n        \"\"\"空列表的元素数量应该是 0。\"\"\"\n    \n        result = count_items([])\n    \n>       assert result == 0\nE       assert -1 == 0\n\ntests\\test_counter.py:19: AssertionError\n=========================== short test summary info ===========================\nFAILED tests/test_counter.py::test_count_three_items - assert 2 == 3\nFAILED tests/test_counter.py::test_count_empty_items - assert -1 == 0\n2 failed in 0.10s\n",
+      "source_repo": "D:\\repopilot-handwrite\\examples\\buggy_off_by_one"
+    }
+  ]
+}

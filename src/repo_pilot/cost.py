@@ -49,7 +49,7 @@ class CostTracker:
             "calls":len(self.records),
             "input_tokens":total_input_tokens,
             "output_tokens":total_output_tokens,
-            "estimated_coat":round(total_cost,8),
+            "estimated_cost":round(total_cost,8),
             "records":[
                 asdict(record)
                 for record in self.records

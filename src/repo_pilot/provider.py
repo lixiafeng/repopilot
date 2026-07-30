@@ -256,6 +256,9 @@ class OpenAICompatibleProvider:
                     "content":prompt,
                 },
             ],
+            "response_format": {
+        "type": "json_object",
+            },
             "temperature":0,
         }
         
@@ -264,6 +267,7 @@ class OpenAICompatibleProvider:
             headers=headers,
             json=payload,
         )
+        print(response)
 
         response.raise_for_status()
         try:

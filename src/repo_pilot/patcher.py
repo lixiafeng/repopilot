@@ -196,9 +196,9 @@ Repository context:
         
         if occurrence_count>1:
             raise ValueError(
-                f"Old text found multiple times in file:"
-                f"{relative_path.as_posix()}"
-                f"replacement is ambingopus."
+                f"Old text appears {occurrence_count} times in "
+        f"{relative_path.as_posix()}; "
+        "replacement is ambiguous."
             )
         
         after=before.replace(

@@ -1,7 +1,7 @@
 class RetryPolicy:
 
     RETRYABLE_FAILURES={
-        "syntex_error",
+        "syntax_error",
         "import_error",
         "assertion_failure",
         "patch_apply_error",
@@ -33,14 +33,14 @@ class RetryPolicy:
             return "patch_apply_error"
         if(
             stage=="compile"
-            or "syntax error" in combined_text
+            or "syntaxerror" in combined_text
             or "indentationerror" in combined_text
         ):
-            return "syntex_error" 
+            return "syntax_error" 
         
         if(
-            "ModuleNotFoundError" in combined_text
-            or"ImportError" in combined_text
+            "modulenotfounderror" in combined_text
+            or"importrror" in combined_text
         ):
             return "import_error"
         

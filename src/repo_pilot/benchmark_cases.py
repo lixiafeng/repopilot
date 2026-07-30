@@ -61,5 +61,53 @@ def build_default_cases(
         ),
         test_command="python -m pytest -q",
     ),
+        BenchmarkCase(
+            name="missing_math_import",
+            source_repo=(resolved_root
+                        / "examples"
+                        / "buggy_missing_import"),
+            issue=(
+                "circle_area should calculate the area "
+                "of a circle, but the required math "
+                "module is missing"
+            ),
+            test_command="python -m pytest -q",
+        ),
+        BenchmarkCase(
+            name="wrong_age_condition",
+            source_repo=(resolved_root
+                        / "examples"
+                         / "buggy_condition"),
+            issue=(
+                "is_adult should return True for ages "
+                "greater than or equal to 18 and False "
+                "otherwise"
+            ),
+            test_command="python -m pytest -q",
+        ),
+        BenchmarkCase(
+            name="string_normalization",
+            source_repo=(resolved_root
+                        / "examples"
+                         / "buggy_string_normalization"),
+            issue=(
+                "normalize_name should remove leading "
+                "and trailing whitespace and convert "
+                "the result to lowercase"
+            ),
+            test_command="python -m pytest -q",
+        ),
+        BenchmarkCase(
+            name="wrong_discount_calculation",
+            source_repo=(resolved_root
+                        / "examples"
+                         / "buggy_discount"),
+            issue=(
+                "calculate_final_price should apply "
+                "the discount percentage correctly "
+                "and return the final price"
+            ),
+            test_command="python -m pytest -q",
+        ),
 
     ]

@@ -57,7 +57,7 @@ def parse_json_object(
 
         return data
     
-    decoder=json.JSONDecodeError()
+    decoder=json.JSONDecoder()
 
     for index,character in enumerate(stripped):
         if character !="{":

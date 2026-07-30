@@ -1,3 +1,5 @@
+扫描 → 测试 → 分析 → 计划 → 补丁 → 审查 → 应用 → 验证
+
 创建项目文件夹
 创建pyproject.toml
 创建config.py
@@ -61,3 +63,256 @@ patchPlanner:修复计划
 
 
 生成JSONpatch
+
+patch
+
+patchreviewer
+
+应用补丁，生成diff::路径是否在仓库内
+目标文件是否存在
+old 是否真的存在
+old 是否只出现一次
+operation 类型是否支持
+
+
+verifier
+
+(.venv-1) PS D:\repopilot-handwrite> python -m repo_pilot.cli --repo examples/buggy_calculator --issue "divide by zero should raise ValueError"
+AgentState started
+repo=D:\repopilot-handwrite\examples\buggy_calculator
+issue=divide by zero should raise ValueError
+Scanner repository
+Files
+  -calculator.py
+  -tests/conftest.py
+  -tests/test_calculator.py
+Python Files
+  -calculator.py
+  -tests/conftest.py
+  -tests/test_calculator.py
+Test Files
+  -tests/conftest.py
+  -tests/test_calculator.py
+Symbols:
+  - modulecalculator.py(calculator.py:1)
+  - functiondivide(calculator.py:1)
+  - moduletests/conftest.py(tests/conftest.py:1)
+  - importsys(tests/conftest.py:1)
+  - import_frompathlib.Path(tests/conftest.py:2)
+  - moduletests/test_calculator.py(tests/test_calculator.py:1)
+  - importpytest(tests/test_calculator.py:1)
+  - import_fromcalculator.divide(tests/test_calculator.py:3)
+  - functiontest_divide_normal_numbers(tests/test_calculator.py:5)
+  - functiontest_divide_by_zero_raises_value_error(tests/test_calculator.py:8)
+Running initial test command...
+exit_code=1
+duration_seconds=0.50
+.F                                                                       [100%]
+================================== FAILURES ===================================
+___________________ test_divide_by_zero_raises_value_error ____________________
+
+    def test_divide_by_zero_raises_value_error():
+        with pytest.raises(ValueError):
+>           divide(1,0)
+
+tests\test_calculator.py:10: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+a = 1, b = 0
+
+    def divide(a,b):
+>       return a / b
+               ^^^^^
+E       ZeroDivisionError: division by zero
+
+calculator.py:2: ZeroDivisionError
+=========================== short test summary info ===========================
+FAILED tests\test_calculator.py::test_divide_by_zero_raises_value_error - Zer...
+1 failed, 1 passed in 0.07s
+
+Analyzing test failures...
+Failures:
+  summary = ZeroDivisionError:division by zero
+  exception_type = ZeroDivisionError
+  exception_message = division by zero
+  failed_tests:
+    - t
+  locations:
+    - tests/test_calculator.py:10
+    - calculator.py:2
+Candidate files:
+  - tests/test_calculator.py
+  - calculator.py
+Building context pack...
+calculator.py
+calculator.py
+tests/conftest.py
+tests/conftest.py
+tests/conftest.py
+tests/test_calculator.py
+tests/test_calculator.py
+tests/test_calculator.py
+tests/test_calculator.py
+tests/test_calculator.py
+ContextPack:
+  issue: divide by zero should raise ValueError
+  candidate files:
+    - tests/test_calculator.py
+    - calculator.py
+  snippets:
+    file: tests/test_calculator.py
+    truncated: False
+    content:
+import pytest
+
+from calculator  import divide
+
+def test_divide_normal_numbers():
+    assert divide(6,2)==3
+
+def test_divide_by_zero_raises_value_error():
+    with pytest.raises(ValueError):
+        divide(1,0)
+
+    file: calculator.py
+    truncated: False
+    content:
+def divide(a,b):
+    return a / b
+
+  symbol hits:
+    - module calculator.py (calculator.py:1)
+    - function divide (calculator.py:1)
+    - module tests/test_calculator.py (tests/test_calculator.py:1)
+    - import pytest (tests/test_calculator.py:1)
+    - import_from calculator.divide (tests/test_calculator.py:3)
+    - function test_divide_normal_numbers (tests/test_calculator.py:5)
+    - function test_divide_by_zero_raises_value_error (tests/test_calculator.py:8)
+Creating repair plan...
+Repair plan:
+  root cause: divide function does not handle zero explicity
+  files to inspect:
+    - calculator.py
+    - tests/test_calculator.py
+  files to modify:
+    - calculator.py
+  patch strategy: check whether b is zero and rsise ValueError before division.
+  verification commands:
+    - pytest -q
+  risks:
+    - The change should not affect normal division.
+Create JSON patch...
+JSON patch:
+  notes: Add an explicit zero check before division.
+  operations:
+    type: replace_text
+    path: calculator.py
+    old:
+def divide(a,b):
+    return a / b
+
+    new:
+def divide(a,b):
+    if b == 0:
+        raise ValueError('Division by zero')
+    return a / b
+
+Reviewing JSON patch...
+Patch approved:True
+Review issues:
+  No issues found.
+Applying JSON patch...
+resolved_repo: D:\repopilot-handwrite\examples\buggy_calculator
+resolved_target: D:\repopilot-handwrite\examples\buggy_calculator\calculator.py
+Patch applied successfully.
+Generated diff:
+--- a/calculator.py
++++ b/calculator.py
+@@ -1,2 +1,4 @@
+ def divide(a,b):
++    if b == 0:
++        raise ValueError('Division by zero')
+     return a / b
+
+Verifying applied patch...
+Verification exit code: 0
+Verification output:
+..                                                                       [100%]
+2 passed in 0.02s
+
+SUCCESS
+Patch applied and verified successfully.
+
+
+
+retrypolicy:补丁应用失败重试、验证失败重试
+
+给patch增加文件快照  找到文件路径然后存在snapshot 如果验证失败恢复文件
+多轮重复
+
+
+trace：trace add和 trace save  
+
+cost
+
+output 
+
+接入openai\deepseek
+
+处理返回的信息不是严格的json
+调用模型并取得一个 JSON 对象。
+
+    首次输出无法解析时，再调用一次模型，
+    要求它只修复 JSON 格式。
+
+   调用模型。
+    遇到临时网络错误或可重试的 HTTP 状态码时，
+    使用指数退避进行重试。
+
+
+    异常处理
+
+    为核心模块添加单元测试assert 错误示例
+
+    使用 httpx.MockTransport 测试真实 Provider 的 HTTP 成功、429 重试、401 不重试和超时重试逻辑
+
+
+
+建立Beachmark/Eval的基础框架
+
+python -m repo_pilot.eval_cli
+            ↓
+eval_cli.py 的 main()
+            ↓
+创建 RepoPilotConfig
+            ↓
+创建 EvalRunner
+            ↓
+runner.run(cases)
+            ↓
+benchmark.py 的 EvalRunner.run()
+            ↓
+_run_case()
+            ↓
+复制临时仓库
+            ↓
+BugfixWorkflow.run()
+            ↓
+返回 WorkflowResult
+            ↓
+统计成功率
+            ↓
+生成 summary.json
+            ↓
+返回 EvalReport
+            ↓
+eval_cli.py 打印结果
+
+
+写入第二个案例，真实模型运行benchmark
+
+fastapi
+
+
+
+
