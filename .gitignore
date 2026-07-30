@@ -8,3 +8,10 @@ build/
 *.egg-info/
 runs/
 eval_report.json
+*.py[cod]
+.mypy_cache/
+.ruff_cache/
+.env
+eval_runs/
+.idea/
+.vscode/

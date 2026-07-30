@@ -123,8 +123,10 @@ def test_repair_api_runs_real_workflow(
 
     body = response.json()
 
-    # Workflow 应该完成修复。
-    assert body["success"] is True
+    # 临时打印 API 返回的完整修复结果。
+ 
+
+    assert body["success"] is True, body
 
     # 字段名必须是 iteration，
     # 不能写成 iterations。
