@@ -105,10 +105,7 @@ python -m repo_pilot.eval_cli `
 
 * Pass Rate
 * Average Iteration
-* Total Duration
-* Failure Reason
-* Diff
-* Test Output
+
 
 ## FastAPI
 
