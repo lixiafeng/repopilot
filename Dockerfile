@@ -20,13 +20,4 @@ ENV REPOPILOT_TRACE_DIR=/app/runs
 
 EXPOSE 8000
 
-CMD [
-  "python",
-  "-m",
-  "uvicorn",
-  "repo_pilot.api:app",
-  "--host",
-  "0.0.0.0",
-  "--port",
-  "8000"
-]
+CMD ["python", "-m", "uvicorn", "repo_pilot.api:app", "--host", "0.0.0.0", "--port", "8000"]
