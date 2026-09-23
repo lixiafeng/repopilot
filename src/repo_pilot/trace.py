@@ -1,41 +1,31 @@
+from __future__ import annotations
+
 import json
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from repo_pilot.event_sink import emit_trace_event
+
+
 class TraceRecorder:
-    def __init__(self,trace_root:Path):
+    def __init__(self, trace_root: Path):
+        run_name = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+        self.run_dir = trace_root / run_name
+        self.run_dir.mkdir(parents=True, exist_ok=True)
+        self.events: list[dict[str, Any]] = []
 
-        run_name=datetime.now().strftime(
-            "%Y%m%d_%H%M%S_%f"
-        )
-
-        self.run_dir=trace_root/run_name
-
-        self.run_dir.mkdir(
-            parents=True,
-            exist_ok=True,
-        )
-
-        self.events:list[dict[str,Any]]=[]
-
-    def  add(
-            self,
-            event_type:str,
-            payload:dict[str,Any],
-    )->None:
-        
-        event={
-            "time":datetime.now().isoformat(),
-            "type":event_type,
-            "payload":payload,
+    def add(self, event_type: str, payload: dict[str, Any]) -> None:
+        event = {
+            "time": datetime.now().isoformat(),
+            "type": event_type,
+            "payload": payload,
         }
         self.events.append(event)
-        
-    def save(self)->Path:
+        emit_trace_event(event_type=event_type, payload=payload)
 
-        trace_path=self.run_dir/"trace.json"
-
+    def save(self) -> Path:
+        trace_path = self.run_dir / "trace.json"
         trace_path.write_text(
             json.dumps(
                 self.events,
@@ -44,6 +34,5 @@ class TraceRecorder:
                 default=str,
             ),
             encoding="utf-8",
-        )  
-
+        )
         return trace_path
