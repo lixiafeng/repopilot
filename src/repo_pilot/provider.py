@@ -80,6 +80,92 @@ class FakeProvider:
                 estimated_cost=0.0,
             )
 
+
+class RetryDemoProvider:
+    """
+    Local deterministic provider for retry/recovery verification.
+
+    Attempt 1 deliberately generates a wrong repair.
+    Attempt 2 generates the correct repair.
+    """
+
+    def __init__(self, model: str = "retry-demo-model") -> None:
+        self.model = model
+        self.patch_calls = 0
+
+    def complete(self, prompt: str) -> ModelResponse:
+        if "TASK: CREATE_REPAIR_PLAN" in prompt:
+            return ModelResponse(
+                content="""
+{
+  "root_cause_hypothesis": "divide does not explicitly handle zero",
+  "files_to_inspect": [
+    "calculator.py",
+    "tests/test_calculator.py"
+  ],
+  "files_to_modify": [
+    "calculator.py"
+  ],
+  "patch_strategy": "check b before performing division",
+  "verification_commands": [
+    "python -m pytest -q"
+  ],
+  "risks": [
+    "normal division behavior must remain unchanged"
+  ]
+}
+""".strip(),
+                input_tokens=20,
+                output_tokens=10,
+                estimated_cost=0.0,
+            )
+
+        if "TASK: CREATE_JSON_PATCH" in prompt:
+            self.patch_calls += 1
+
+            if self.patch_calls == 1:
+                content = """
+{
+  "operations": [
+    {
+      "type": "replace_text",
+      "path": "calculator.py",
+      "old": "def divide(a,b):\\n    return a / b\\n",
+      "new": "def divide(a,b):\\n    if b == 0:\\n        raise RuntimeError('Division by zero')\\n    return a / b\\n"
+    }
+  ],
+  "notes": "Deliberately incorrect first attempt."
+}
+""".strip()
+            else:
+                content = """
+{
+  "operations": [
+    {
+      "type": "replace_text",
+      "path": "calculator.py",
+      "old": "def divide(a,b):\\n    return a / b\\n",
+      "new": "def divide(a,b):\\n    if b == 0:\\n        raise ValueError('Division by zero')\\n    return a / b\\n"
+    }
+  ],
+  "notes": "Correct repair after failed verification."
+}
+""".strip()
+
+            return ModelResponse(
+                content=content,
+                input_tokens=20,
+                output_tokens=10,
+                estimated_cost=0.0,
+            )
+
+        return ModelResponse(
+            content="ok",
+            input_tokens=1,
+            output_tokens=1,
+            estimated_cost=0.0,
+            )
+
 class OpenAICompatibleProvider:
     RETRYABLE_STATUS_CODES={
         408,
@@ -371,6 +457,8 @@ def create_provider(
     
     if normalized_name=="fake":
         return FakeProvider(model=model)
+    if normalized_name == "retry-demo":
+        return RetryDemoProvider(model=model)
 
     if normalized_name=="openai":
         return OpenAICompatibleProvider(
