@@ -1,10 +1,13 @@
 from __future__ import annotations
+import os
+from pathlib import Path
 
+from repo_pilot.workspace import WorkspaceManager
 import os
 from datetime import datetime, timezone
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
 from repo_pilot.db.models import RepairAttempt, RepairTask, TraceEvent
@@ -12,6 +15,15 @@ from repo_pilot.db.session import SessionLocal
 from repo_pilot.event_sink import reset_trace_sink, set_trace_sink
 from repo_pilot.runtime import create_workflow, resolve_repo_path
 
+def _workspace_manager() -> WorkspaceManager:
+    root = Path(
+        os.getenv(
+            "REPOPILOT_WORKSPACE_ROOT",
+            "runs/workspaces",
+        )
+    )
+
+    return WorkspaceManager(root)
 
 def utcnow() -> datetime:
     return datetime.now(timezone.utc)
@@ -256,28 +268,103 @@ def _make_trace_sink(db: Session, task: RepairTask):
 
     return sink
 
+def _claim_task(
+    db: Session,
+    task_id: int,
+) -> RepairTask | None:
+    """
+    Atomically claim a task for execution.
+
+    Only PENDING/QUEUED tasks may transition to RUNNING.
+    If another worker has already claimed the task,
+    this function returns None.
+    """
+
+    now = utcnow()
+
+    stmt = (
+        update(RepairTask)
+        .where(
+            RepairTask.id == task_id,
+            RepairTask.status.in_(
+                ["PENDING", "QUEUED"]
+            ),
+        )
+        .values(
+            status="RUNNING",
+            current_stage="starting",
+            started_at=now,
+            finished_at=None,
+            success=None,
+            error_type=None,
+            error_message=None,
+        )
+    )
+
+    result = db.execute(stmt)
+
+    if result.rowcount != 1:
+        db.rollback()
+
+        existing = db.get(
+            RepairTask,
+            task_id,
+        )
+
+        if existing is None:
+            raise ValueError(
+                f"RepairTask {task_id} does not exist"
+            )
+
+        # 任务已经被其他 Worker 执行或已经结束。
+        return None
+
+    db.commit()
+
+    return db.get(
+        RepairTask,
+        task_id,
+    )
 
 def run_persisted_task(task_id: int) -> None:
     db = SessionLocal()
     token = None
+
     try:
-        task = db.get(RepairTask, task_id)
+        task = _claim_task(
+            db,
+            task_id,
+        )
+
         if task is None:
-            raise ValueError(f"RepairTask {task_id} does not exist")
+            return
 
-        task.status = "RUNNING"
-        task.current_stage = "starting"
-        task.started_at = task.started_at or utcnow()
-        task.finished_at = None
-        task.success = None
-        task.error_type = None
-        task.error_message = None
-        db.commit()
+        sink = _make_trace_sink(
+            db,
+            task,
+        )
 
-        sink = _make_trace_sink(db, task)
         token = set_trace_sink(sink)
 
-        repo = resolve_repo_path(task.repo_path)
+        # 3. 找到用户提交的原始仓库
+        source_repo = resolve_repo_path(
+            task.repo_path
+        )
+
+        # 4. 为当前 Task 创建独立 Workspace
+        workspace_manager = _workspace_manager()
+
+        workspace = workspace_manager.create(
+            task_id=task.id,
+            source_repo=source_repo,
+        )
+
+        # 5. 把 Workspace 路径保存进数据库
+        task.workspace_path = str(workspace)
+        task.current_stage = "workspace_ready"
+        db.commit()
+
+        # 6. 创建 Agent Workflow
         workflow = create_workflow(
             provider=task.provider,
             model=task.model,
@@ -285,49 +372,139 @@ def run_persisted_task(task_id: int) -> None:
             apply_patch=task.apply_patch,
             command_timeout_sec=task.command_timeout_sec,
         )
+
+        # 7. 关键：
+        #    Agent 不再操作 source_repo，
+        #    而是在独立 workspace 中工作。
         result = workflow.run(
-            repo=repo,
+            repo=workspace,
             issue=task.issue,
             test_command=task.test_command,
         )
 
+        # 8. 保存最终任务结果
         task.success = result.success
         task.message = result.message
         task.current_iteration = result.iteration
         task.final_diff = result.diff or ""
         task.test_output = result.test_output or ""
-        task.status = "SUCCEEDED" if result.success else "FAILED"
+
+        task.status = (
+            "SUCCEEDED"
+            if result.success
+            else "FAILED"
+        )
+
         task.current_stage = "finished"
         task.finished_at = utcnow()
 
+        # 9. 保存最终一次 Attempt 的结果
         if result.iteration > 0:
-            attempt = _ensure_attempt(db, task, result.iteration)
-            attempt.diff = result.diff or attempt.diff
-            attempt.test_output = result.test_output or ""
-            attempt.status = "SUCCEEDED" if result.success else "FAILED"
-            attempt.finished_at = attempt.finished_at or utcnow()
+            attempt = _ensure_attempt(
+                db,
+                task,
+                result.iteration,
+            )
+
+            attempt.diff = (
+                result.diff
+                or attempt.diff
+            )
+
+            attempt.test_output = (
+                result.test_output
+                or ""
+            )
+
+            attempt.status = (
+                "SUCCEEDED"
+                if result.success
+                else "FAILED"
+            )
+
+            attempt.finished_at = (
+                attempt.finished_at
+                or utcnow()
+            )
 
         db.commit()
 
     except Exception as exc:
         db.rollback()
-        task = db.get(RepairTask, task_id)
+
+        task = db.get(
+            RepairTask,
+            task_id,
+        )
+
         if task is not None:
             task.status = "FAILED"
             task.success = False
             task.current_stage = "error"
-            task.error_type = type(exc).__name__
+
+            task.error_type = (
+                type(exc).__name__
+            )
+
             task.error_message = str(exc)
-            task.message = f"Task failed: {type(exc).__name__}: {exc}"
+
+            task.message = (
+                f"Task failed: "
+                f"{type(exc).__name__}: "
+                f"{exc}"
+            )
+
             task.finished_at = utcnow()
+
             db.commit()
+
         raise
+
     finally:
         if token is not None:
             reset_trace_sink(token)
+
         db.close()
+def _queue_task(
+    db: Session,
+    task_id: int,
+) -> bool:
+    """
+    Transition PENDING -> QUEUED exactly once.
+    """
 
+    stmt = (
+        update(RepairTask)
+        .where(
+            RepairTask.id == task_id,
+            RepairTask.status == "PENDING",
+        )
+        .values(
+            status="QUEUED",
+            current_stage="queued",
+        )
+    )
 
+    result = db.execute(stmt)
+
+    if result.rowcount != 1:
+        db.rollback()
+
+        existing = db.get(
+            RepairTask,
+            task_id,
+        )
+
+        if existing is None:
+            raise ValueError(
+                f"RepairTask {task_id} does not exist"
+            )
+
+        return False
+
+    db.commit()
+
+    return True
 def dispatch_task(task_id: int) -> None:
     mode = os.getenv("REPOPILOT_TASK_MODE", "inline").strip().lower()
 
@@ -337,17 +514,21 @@ def dispatch_task(task_id: int) -> None:
 
     if mode == "celery":
         db = SessionLocal()
+
         try:
-            task = db.get(RepairTask, task_id)
-            if task is None:
-                raise ValueError(f"RepairTask {task_id} does not exist")
-            task.status = "QUEUED"
-            task.current_stage = "queued"
-            db.commit()
+            queued = _queue_task(
+                db,
+                task_id,
+            )
         finally:
             db.close()
 
-        from repo_pilot.worker.tasks import execute_repair_task
+        if not queued:
+            return
+
+        from repo_pilot.worker.tasks import (
+            execute_repair_task,
+        )
 
         execute_repair_task.delay(task_id)
         return

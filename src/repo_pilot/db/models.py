@@ -27,6 +27,10 @@ class RepairTask(Base):
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
 
     repo_path: Mapped[str] = mapped_column(Text, nullable=False)
+    workspace_path: Mapped[str | None] = mapped_column(
+    Text,
+    nullable=True,
+)
     issue: Mapped[str] = mapped_column(Text, nullable=False)
     test_command: Mapped[str] = mapped_column(Text, nullable=False)
 
