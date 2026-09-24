@@ -605,17 +605,12 @@ class BugfixWorkflow:
                 event_type="verification_finished",
                 payload={
                     "iteration": iteration,
-                    "success": (
-                        state.verification["success"]
-                    ),
-                    "stage": (
-                        state.verification["stage"]
-                    ),
-                    "exit_code": (
-                        state.verification["exit_code"]
-                    ),
+                    "success": state.verification["success"],
+                    "stage": state.verification["stage"],
+                    "exit_code": state.verification["exit_code"],
+                    "output": state.verification["output"],
                 },
-            )
+                )
             print(  
                 f"Verification stage: "
                 f"{state.verification['stage']}"
@@ -653,6 +648,16 @@ class BugfixWorkflow:
                 iteration=iteration,
                 max_iterations=self.config.max_iterations,
             )
+            )
+            trace.add(
+                event_type="retry_decision",
+                payload={
+                    "iteration": iteration,
+                    "stage": state.verification["stage"],
+                    "failure_type": failure_type,
+                    "retry_allowed": retry_allowed,
+                    "output": state.verification["output"],
+                },
             )
 
 # 把本轮失败信息保存到 AgentState。

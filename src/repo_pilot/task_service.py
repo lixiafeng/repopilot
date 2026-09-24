@@ -132,6 +132,10 @@ def _task_status_for_event(event_type: str, payload: dict[str, Any]) -> str | No
         return "PATCHING"
     if event_type == "verification_finished":
         return "TESTING"
+    if event_type == "retry_decision":
+        if bool(payload.get("retry_allowed")):
+            return "RETRYING"
+        return "FAILED"
     if event_type == "snapshot_restored":
         return "RETRYING"
     if event_type == "workflow_error":
@@ -200,12 +204,40 @@ def _make_trace_sink(db: Session, task: RepairTask):
                 attempt.error_message = str(payload.get("issues") or "")
                 attempt.finished_at = utcnow()
             elif event_type == "verification_finished":
+                attempt.test_output = str(
+                    payload.get("output") or ""
+                )
+
                 if bool(payload.get("success")):
                     attempt.status = "SUCCEEDED"
                 else:
                     attempt.status = "FAILED"
-                    attempt.error_type = str(payload.get("stage") or "TEST_FAILED")
+
                 attempt.finished_at = utcnow()
+            elif event_type == "retry_decision":
+                attempt.status = "FAILED"
+
+                attempt.error_type = str(
+                    payload.get("failure_type")
+                    or "UNKNOWN_FAILURE"
+                )
+
+                attempt.error_message = (
+                    f"Verification failed; "
+                    f"retry_allowed="
+                    f"{bool(payload.get('retry_allowed'))}"
+                )
+
+                attempt.test_output = str(
+                    payload.get("output")
+                    or attempt.test_output
+                    or ""
+                )
+
+                attempt.finished_at = (
+                    attempt.finished_at or utcnow()
+                )
+
 
         safe_payload = {
             str(k): _json_value(v)
