@@ -648,7 +648,7 @@ class BugfixWorkflow:
             )
 
 # 判断是否还有下一轮机会。
-            retry_allowed = (self.retry_policy.should_retry(
+            retry_allowed = (self.retry.should_retry(
                 failure_type=failure_type,
                 iteration=iteration,
                 max_iterations=self.config.max_iterations,

@@ -11,7 +11,10 @@ from sqlalchemy.orm import Session
 from repo_pilot.db.models import RepairAttempt, RepairTask, TraceEvent
 from repo_pilot.db.session import get_db
 from repo_pilot.result import WorkflowResult
-from repo_pilot.runtime import create_workflow, resolve_repo_path
+from repo_pilot.runtime import (
+    create_workflow as create_runtime_workflow,
+    resolve_repo_path,
+)
 from repo_pilot.task_service import (
     create_task,
     dispatch_task,
@@ -35,6 +38,21 @@ class RepairRequest(BaseModel):
     max_iterations: int = Field(default=2, ge=1, le=10)
     apply_patch: bool = True
     command_timeout_sec: int = Field(default=120, ge=1, le=3600)
+
+def create_workflow(request: RepairRequest):
+    """
+    Compatibility wrapper for the synchronous /repair endpoint.
+
+    Keep request-based construction so API tests and callers can
+    monkeypatch create_workflow(request).
+    """
+    return create_runtime_workflow(
+        provider=request.provider,
+        model=request.model,
+        max_iterations=request.max_iterations,
+        apply_patch=request.apply_patch,
+        command_timeout_sec=request.command_timeout_sec,
+    )
 
 
 class RepairResponse(BaseModel):
@@ -143,13 +161,7 @@ def repair(request: RepairRequest) -> RepairResponse:
 
     try:
         with repair_lock:
-            workflow = create_workflow(
-                provider=request.provider,
-                model=request.model,
-                max_iterations=request.max_iterations,
-                apply_patch=request.apply_patch,
-                command_timeout_sec=request.command_timeout_sec,
-            )
+            workflow = create_workflow(request)
             result = workflow.run(
                 repo=repo,
                 issue=request.issue,
