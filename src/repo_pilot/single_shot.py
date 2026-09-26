@@ -192,6 +192,8 @@ class SingleShotWorkflow:
                 plan=baseline_plan,
                 cost_tracker=cost_tracker,
             )
+            print("Generated single-shot patch:")
+            print(patch)
 
             review_result = (
                 self.reviewer.review(

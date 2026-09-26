@@ -37,6 +37,7 @@ def make_agent() -> BugfixWorkflow:
 
 
 def parse_args() -> argparse.Namespace:
+
     parser = argparse.ArgumentParser(
         description=(
             "Compare context-aware single-shot "
@@ -52,12 +53,29 @@ def parse_args() -> argparse.Namespace:
             "Use --limit 1 for a cheap smoke test."
         ),
     )
+    parser.add_argument(
+        "--case",
+        type=str,
+        default=None,
+        help="Run one benchmark case by name.",
+    )
     return parser.parse_args()
 
 
 def main() -> None:
     args = parse_args()
     cases = build_default_cases(PROJECT_ROOT)
+    if args.case is not None:
+        cases = [
+            case
+            for case in cases
+            if case.name == args.case
+        ]
+
+        if not cases:
+            raise ValueError(
+                f"Unknown benchmark case: {args.case}"
+            )
 
     if args.limit is not None:
         if args.limit <= 0:
