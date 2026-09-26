@@ -1,31 +1,31 @@
 # RepoPilot
 
-**RepoPilot** is a repository-level AI bug-fixing agent that combines a closed-loop repair workflow with an asynchronous task execution platform.
+**RepoPilot** 是一个面向代码仓库级别 Bug 修复的 AI Agent 项目，结合了闭环修复工作流与异步任务执行平台。
 
-It is designed around a simple idea: a coding agent should not only generate a patch once. It should inspect repository context, run tests, analyze failures, propose a repair, verify the result, and use new test feedback when another iteration is needed.
+项目的核心思路是：代码修复 Agent 不应该只调用一次大模型生成补丁，而应该能够读取仓库上下文、运行测试、分析失败原因、生成修复方案、验证结果，并在失败后利用新的测试反馈继续下一轮修复。
 
-RepoPilot also separates **agent evaluation** from **platform execution** so the repair loop can be benchmarked independently from infrastructure such as PostgreSQL, Redis, and Celery.
-
----
-
-## What RepoPilot Does
-
-Given a repository, an issue description, and a test command, RepoPilot can:
-
-1. scan the repository and build a lightweight symbol index;
-2. execute the existing tests and analyze failures;
-3. select relevant source and test files;
-4. build a repair plan;
-5. generate and review a structured patch;
-6. apply the patch inside an isolated workspace;
-7. rerun tests to verify the repair;
-8. retry with new failure feedback when allowed;
-9. rollback failed iterations before the next repair attempt;
-10. persist task, attempt, and trace information when running through the task platform.
+RepoPilot 同时将 **Agent 修复能力评测** 与 **任务执行基础设施** 分离，使得 Agent 本身可以独立进行 Benchmark，而不会把 PostgreSQL、Redis、Celery 等基础设施故障混入修复能力评测结果。
 
 ---
 
-## Architecture
+## 项目功能
+
+给定一个代码仓库、Issue 描述和测试命令后，RepoPilot 可以完成：
+
+1. 扫描代码仓库并构建轻量级 Symbol Index；
+2. 执行现有测试并分析失败信息；
+3. 选择相关源码文件和测试文件；
+4. 生成修复计划；
+5. 生成并审核结构化 Patch；
+6. 在隔离 Workspace 中应用 Patch；
+7. 重新运行测试验证修复结果；
+8. 在允许 Retry 时利用新的测试反馈进入下一轮；
+9. 失败后 Rollback 到本轮修改前的仓库状态；
+10. 通过任务平台运行时，将 Task、Attempt 和 Trace 持久化。
+
+---
+
+## 系统架构
 
 ```mermaid
 flowchart TD
@@ -59,39 +59,39 @@ flowchart TD
     U --> B
 ```
 
-RepoPilot has two intentionally separate layers:
+RepoPilot 主要分成两个层次。
 
 ### Agent Core
 
-Responsible for repair quality:
+负责代码修复能力：
 
-- repository scanning;
-- symbol indexing;
-- test failure analysis;
-- context selection;
-- planning;
-- structured patch generation;
-- patch review;
-- verification;
-- retry and rollback.
+- Repository Scanner
+- Symbol Index
+- Test Failure Analysis
+- Context Selection
+- Planner
+- Structured Patch Generation
+- Patch Review
+- Verification
+- Retry / Rollback
 
 ### Task Platform
 
-Responsible for execution reliability:
+负责任务执行可靠性：
 
-- FastAPI task submission;
-- PostgreSQL persistence;
-- Redis + Celery asynchronous execution;
-- atomic task claiming;
-- duplicate-delivery protection;
-- isolated per-task workspaces;
-- persisted attempts and trace events.
+- FastAPI 任务提交
+- PostgreSQL 持久化
+- Redis + Celery 异步执行
+- 原子任务领取
+- 重复消息保护
+- 独立 Workspace
+- Repair Attempt / Trace 持久化
 
-This separation makes it possible to benchmark the agent loop without mixing model quality with infrastructure failures.
+将两层分离后，可以独立评估 Agent 的代码修复能力，而不会把基础设施异常误认为模型修复能力问题。
 
 ---
 
-## Repair Loop
+## Agent 修复流程
 
 ```mermaid
 flowchart LR
@@ -112,133 +112,183 @@ flowchart LR
     N --> C
 ```
 
-A failed iteration is rolled back before the next attempt. Previous attempts and verification output are retained as feedback so later iterations can reason from new evidence without accumulating partially applied patches.
+每次 Repair Iteration 失败后，RepoPilot 会恢复到该轮修改前的仓库快照。
+
+同时会保存前一轮的：
+
+- Patch Diff
+- Verification Output
+- Failure Type
+- Retry Decision
+
+下一轮可以利用这些历史信息继续推理，而不会在已经被部分修改的代码上不断叠加补丁。
 
 ---
 
-## Reliability Features
+## 可靠性设计
 
-### Persistent Task State
+### PostgreSQL 持久化
 
-Repair tasks, repair attempts, and trace events are persisted in PostgreSQL so execution state is not tied to a single API process.
+Repair Task、Repair Attempt 和 Trace Event 都可以持久化到 PostgreSQL。
 
-### Asynchronous Workers
+这样任务状态不会依赖单个 API 进程的生命周期。
 
-Long-running repair jobs are dispatched through Redis and Celery instead of blocking the API request lifecycle.
+### Redis + Celery 异步执行
 
-### Idempotent Task Execution
+耗时较长的 Repo Repair Job 通过 Redis 和 Celery Worker 异步处理，而不是阻塞 FastAPI 请求。
 
-Workers atomically claim eligible tasks before executing them. Duplicate Celery deliveries for the same task do not cause the repair workflow to run repeatedly.
+### 幂等任务执行
+
+Worker 在执行任务前通过原子状态更新领取任务。
+
+同一个 RepairTask 即使被 Celery 重复投递，也不会重复执行 Workflow。
 
 ### Workspace Isolation
 
-Each repair task operates on its own copied workspace, for example:
+每个 RepairTask 都会拥有独立 Workspace，例如：
 
 ```text
 runs/workspaces/task-<id>/
 ```
 
-Concurrent tasks can target the same source repository without modifying the original repository or interfering with each other.
+因此多个任务即使同时修复同一个源仓库，也不会：
+
+- 修改原始 Repo；
+- 相互覆盖文件；
+- 共享未完成的 Patch 状态。
 
 ### Retry + Rollback
 
-Failed repair attempts can be retried according to the retry policy. Before retrying, RepoPilot restores the repository snapshot from the start of the previous iteration.
+当 Repair Attempt 失败且满足 RetryPolicy 时，RepoPilot 可以继续下一轮修复。
 
-### Traceability
+进入下一轮前会恢复 Repository Snapshot，从已知一致状态重新开始。
 
-The workflow records structured trace events for important stages such as:
+### Trace 可观测性
 
-- repository scan;
-- initial test execution;
-- failure analysis;
-- context construction;
-- plan generation;
-- patch generation;
-- patch application;
-- verification;
-- retry decisions;
-- snapshot restoration;
-- token/call summary.
+Workflow 会记录结构化 Trace Event，包括：
 
-This makes failed runs inspectable rather than opaque.
+- Repository Scan
+- Initial Test
+- Failure Analysis
+- Context Build
+- Plan Generation
+- Patch Generation
+- Patch Apply
+- Verification
+- Retry Decision
+- Snapshot Restore
+- Model Call / Token Summary
+
+因此失败任务可以被追踪和分析，而不是只得到一个最终的 `FAILED` 状态。
 
 ---
 
-## Benchmarking
+## Benchmark
 
-RepoPilot includes a **context-aware single-shot baseline** to evaluate whether the full agent loop provides value beyond one patch-generation attempt.
+RepoPilot 实现了一个 **Context-aware Single-shot Baseline**，用于判断完整 Agent Workflow 是否真的比单轮 Patch Generation 更有价值。
 
-The two strategies intentionally share the same core components where possible:
+Single-shot 和 Agent 尽可能共享相同组件：
 
-| Component | Context Single-shot | RepoPilot Agent |
+| 能力 | Context Single-shot | RepoPilot Agent |
 |---|---:|---:|
-| Repository scan | Yes | Yes |
-| Symbol index | Yes | Yes |
-| Initial tests | Yes | Yes |
-| Failure analysis | Yes | Yes |
-| Context builder | Yes | Yes |
-| Patch generator | Yes | Yes |
-| Patch verification | Yes | Yes |
-| LLM planning step | No | Yes |
-| Multi-round retry | No | Yes |
-| Rollback between retries | No | Yes |
-| Test-feedback-driven next iteration | No | Yes |
+| Repository Scan | Yes | Yes |
+| Symbol Index | Yes | Yes |
+| Initial Tests | Yes | Yes |
+| Failure Analysis | Yes | Yes |
+| Context Builder | Yes | Yes |
+| Patch Generator | Yes | Yes |
+| Patch Verification | Yes | Yes |
+| LLM Planner | No | Yes |
+| Multi-round Retry | No | Yes |
+| Rollback | No | Yes |
+| Test Feedback 驱动下一轮 | No | Yes |
 
-### Basic benchmark
+### 基础 Benchmark
 
-A representative run on six basic Python bug cases produced:
+在 6 个基础 Python Bug Case 的一次代表性运行中：
 
-| Metric | Context Single-shot | RepoPilot Agent |
+| 指标 | Context Single-shot | RepoPilot Agent |
 |---|---:|---:|
-| Passed cases | 6 / 6 | 6 / 6 |
-| Pass rate | 100% | 100% |
-| Avg. model calls | 1.0 | 2.0 |
-| Avg. tokens | 1,189.5 | 2,344.5 |
-| Avg. duration | 4.03 s | 6.21 s |
+| 通过 Case | 6 / 6 | 6 / 6 |
+| Pass Rate | 100% | 100% |
+| 平均 Model Calls | 1.0 | 2.0 |
+| 平均 Tokens | 1,189.5 | 2,344.5 |
+| 平均耗时 | 4.03 s | 6.21 s |
 
-The result is intentionally not presented as an Agent win. On simple bugs, a strong context-aware single-shot baseline can already solve the task with fewer calls, tokens, and lower latency.
+这个结果并不意味着 Agent 在简单任务上更好。
 
-Retry-sensitive cases are maintained separately to study when additional test feedback and multi-round repair become useful. Those cases are still exploratory and are **not used as a headline success-rate claim**.
+相反，它说明：
 
-### Run the benchmark
+> 对于简单 Bug，拥有良好 Context 的 Single-shot Baseline 已经能够完成修复，而完整 Agent 会产生额外的模型调用、Token 和延迟。
+
+因此 RepoPilot 将 Retry-sensitive Case 单独用于分析：
+
+- Test Feedback
+- Retry
+- Rollback
+- Multi-round Repair
+
+在什么情况下能够带来额外价值。
+
+目前这部分 Case 仍属于探索性评测，因此项目不会使用它们来宣称未经充分验证的成功率提升。
+
+### 运行 Benchmark
+
+运行全部 Benchmark：
 
 ```powershell
 python .\scripts\benchmark_compare.py
 ```
 
-Run a specific case:
+运行指定 Case：
 
 ```powershell
 python .\scripts\benchmark_compare.py --case staged_dynamic_rule
 ```
 
-Benchmark results are written under:
+Benchmark 输出保存在：
 
 ```text
 benchmark_runs/
 ```
 
-Generated benchmark artifacts should normally remain outside version control.
+这些运行产物默认不应该提交到 Git。
 
-> Note: token and model-call statistics are tracked directly. Provider pricing is not currently configured for all models, so `estimated_cost` may remain `0.0` even when the provider charges for API usage.
+> 注意：项目目前可以记录 Model Calls 和 Token Usage，但并未为所有 Provider 配置价格，因此 `estimated_cost` 可能显示为 `0.0`。这不代表 API 调用本身免费。
 
 ---
 
-## Testing
+## 测试
 
-Run the automated test suite:
+运行自动化测试：
 
 ```powershell
 python -m pytest tests -q
 ```
 
-The project includes tests around the repair workflow, retry behavior, context construction, workspace isolation, persistence behavior, API compatibility, and benchmark logic.
+测试覆盖的主要能力包括：
 
-The benchmark suite is separate from the platform tests: benchmarks measure repair behavior, while persistence and worker infrastructure are validated independently.
+- Repair Workflow
+- Retry / Rollback
+- Context Construction
+- Workspace Isolation
+- Persistence
+- API Compatibility
+- Benchmark Logic
+
+Benchmark 与 Platform Test 是两套不同的验证体系：
+
+```text
+Benchmark
+→ 评估 Agent 修复能力
+
+Platform / Integration Tests
+→ 验证任务持久化、并发、幂等和隔离
+```
 
 ---
 
-## Project Structure
+## 项目结构
 
 ```text
 repopilot-agent/
@@ -263,58 +313,93 @@ repopilot-agent/
 ├── tests/
 │   └── ...
 │
-├── runs/                # runtime traces / workspaces, ignored by Git
-├── benchmark_runs/      # generated benchmark output, ignored by Git
+├── runs/                # Runtime Trace / Workspace，Git 忽略
+├── benchmark_runs/      # Benchmark 结果，Git 忽略
 └── README.md
 ```
 
 ---
 
-## Design Decisions
+## 关键设计决策
 
-### Why not send the whole repository to the model?
+### 为什么不直接把整个 Repository 全部发送给 LLM？
 
-RepoPilot selects candidate files and snippets instead of blindly sending the complete repository. This keeps context focused and makes context-selection failures observable and improvable.
+RepoPilot 会先选择 Candidate Files 和相关代码片段，而不是把整个 Repo 无差别塞入 Prompt。
 
-### Why rollback failed attempts?
+这样可以：
 
-A retry should start from a known repository state. Keeping partially successful patches between iterations makes later failures harder to reason about and can create accidental patch accumulation.
+- 减少无关 Context；
+- 降低 Token 消耗；
+- 让 Context Retrieval 本身可以被分析和优化；
+- 更容易发现“模型失败”究竟是不是因为缺少源码上下文。
 
-### Why keep Single-shot and Agent as separate strategies?
+### 为什么失败后要 Rollback？
 
-Without a baseline, additional planning and retry calls can look useful simply because more model tokens are being spent. The single-shot strategy provides a direct comparison for success rate, calls, tokens, and latency.
+Retry 应该从一个确定的 Repository State 开始。
 
-### Why separate benchmarks from Celery/PostgreSQL?
+如果保留失败轮次中的部分 Patch，下一轮可能出现：
 
-The benchmark asks:
+- Patch 状态叠加；
+- Failure Cause 难以判断；
+- 前后 Iteration 不可比较。
 
-> Can the repair strategy solve the bug?
+因此 RepoPilot 默认恢复到本轮开始前的 Snapshot，再执行下一轮完整修复。
 
-The platform asks:
+### 为什么需要 Single-shot Baseline？
 
-> Can repair jobs be executed reliably, asynchronously, and without task interference?
+如果没有 Baseline，仅仅增加 Planner、Retry 和更多 Token，也可能看起来像“Agent 更强”。
 
-Keeping those questions separate makes failures easier to diagnose and metrics easier to interpret.
+因此 RepoPilot 使用 Context-aware Single-shot 作为对照，比较：
+
+- Success Rate
+- Model Calls
+- Tokens
+- Latency
+
+从而判断 Agent Loop 是否真正产生额外价值。
+
+### 为什么 Benchmark 不走 Celery / PostgreSQL？
+
+Benchmark 关注的问题是：
+
+> Repair Strategy 能不能修复 Bug？
+
+Platform 关注的问题是：
+
+> Repair Job 能不能被可靠、异步、隔离地执行？
+
+如果把两者混在一起，那么一次失败可能来自：
+
+- LLM / Context / Patch；
+- Redis；
+- Celery Worker；
+- PostgreSQL；
+- Workspace；
+- Task 状态。
+
+将两者分开能够让 Benchmark 指标更加清晰。
 
 ---
 
-## Current Scope
+## 当前范围
 
-RepoPilot currently focuses on repository-level Python repair workflows and engineering infrastructure around agent execution.
+RepoPilot 当前主要聚焦 Python Repository 的自动 Bug Repair，以及 Agent Execution 所需的基础设施。
 
-The project is intentionally **not presented as a production-ready autonomous coding system**. Current areas for future work include:
+项目目前不会将自己描述为生产级 Autonomous Coding System。
 
-- larger and more diverse repair benchmarks;
-- repeated benchmark runs for stochastic models;
-- stronger runtime/dependency-based context expansion;
-- provider-specific cost accounting;
-- broader language support;
-- production-grade sandboxing and resource limits;
-- automated end-to-end infrastructure testing.
+后续可以继续扩展：
+
+- 更大规模、更复杂的 Repair Benchmark；
+- 对随机模型进行多次重复评测；
+- 更强的 Runtime Dependency / Dynamic Context Expansion；
+- Provider-specific Cost Accounting；
+- 多语言代码支持；
+- 更严格的 Sandbox 和 Resource Limit；
+- 自动化 End-to-End Infrastructure Testing。
 
 ---
 
-## Example Workflow
+## 示例执行链路
 
 ```text
 Issue
@@ -352,11 +437,32 @@ PASS ───────────────→ Finish
 
 ---
 
-## Motivation
+## 项目目标
 
-RepoPilot was built to explore both sides of coding-agent engineering:
+RepoPilot 主要用于探索 Coding Agent 的两个核心问题。
 
-1. **Agent quality** — context selection, planning, patch generation, verification, and feedback-driven repair.
-2. **System quality** — asynchronous execution, persistence, isolation, idempotency, recovery, and observability.
+### Agent Quality
 
-The goal is not simply to call an LLM to generate code, but to make repository repair a measurable and inspectable software workflow.
+关注：
+
+- Context Selection
+- Planning
+- Patch Generation
+- Verification
+- Test Feedback
+- Multi-round Repair
+
+### System Quality
+
+关注：
+
+- Asynchronous Execution
+- Persistence
+- Workspace Isolation
+- Idempotency
+- Failure Recovery
+- Observability
+
+项目目标不是简单封装一次 LLM API 调用，而是把 Repository Repair 构建成一个：
+
+**可执行、可验证、可恢复、可观测、可评测的 Agent Workflow。**
