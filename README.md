@@ -358,28 +358,6 @@ Retry 应该从一个确定的 Repository State 开始。
 
 从而判断 Agent Loop 是否真正产生额外价值。
 
-### 为什么 Benchmark 不走 Celery / PostgreSQL？
-
-Benchmark 关注的问题是：
-
-> Repair Strategy 能不能修复 Bug？
-
-Platform 关注的问题是：
-
-> Repair Job 能不能被可靠、异步、隔离地执行？
-
-如果把两者混在一起，那么一次失败可能来自：
-
-- LLM / Context / Patch；
-- Redis；
-- Celery Worker；
-- PostgreSQL；
-- Workspace；
-- Task 状态。
-
-将两者分开能够让 Benchmark 指标更加清晰。
-
----
 
 ## 当前范围
 
