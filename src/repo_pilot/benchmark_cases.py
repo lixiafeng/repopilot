@@ -109,5 +109,57 @@ def build_default_cases(
             ),
             test_command="python -m pytest -q",
         ),
+        BenchmarkCase(
+            name="staged_discounted_circle_area",
+            source_repo=(
+                resolved_root
+                / "examples"
+                / "buggy_staged_calculation"
+            ),
+            issue=(
+                "discounted_circle_area should "
+                "return the correct circle area "
+                "after applying the requested "
+                "percentage discount"
+            ),
+            test_command=(
+                "python -m pytest -q -x"
+            ),
+        ),
+        BenchmarkCase(
+            name="staged_import_then_runtime",
+            source_repo=(
+                resolved_root
+                / "examples"
+                / "buggy_staged_import_then_runtime"
+            ),
+            issue=(
+                "calculate_final_price should "
+                "return the correct final price "
+                "after applying the requested "
+                "percentage discount"
+            ),
+            test_command=(
+                "python -m pytest -q -x"
+            ),
+        ),
+        BenchmarkCase(
+            name="staged_dynamic_rule",
+            source_repo=(
+                resolved_root
+                / "examples"
+                / "buggy_staged_dynamic_rule"
+            ),
+            issue=(
+                "normalize_and_score should handle "
+                "blank input correctly while "
+                "preserving normal scoring behavior"
+            ),
+            test_command=(
+                "python -m pytest -q -x "
+                "test_01_blank.py "
+                "test_02_score.py"
+            ),
+        ),
 
     ]

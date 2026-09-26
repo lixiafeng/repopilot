@@ -354,6 +354,89 @@ class BugfixWorkflow:
                 },
             )
 
+            # --------------------------------------------------
+            # Plan-driven context refresh
+            # --------------------------------------------------
+            # The planner may discover that a file needs to be
+            # modified even though that file was not present in
+            # the original failure-driven context. Before asking
+            # the patch model to edit it, load its real source.
+            planned_files = state.plan.get(
+                "files_to_modify",
+                [],
+            )
+
+            if not isinstance(
+                planned_files,
+                list,
+            ):
+                planned_files = []
+
+            planned_files = [
+                str(file_name)
+                for file_name in planned_files
+            ]
+
+            before_refresh = list(
+                state.context_pack.get(
+                    "candidate_files",
+                    [],
+                )
+            )
+
+            state.context_pack = (
+                self.context_builder.add_files(
+                    context_pack=(
+                        state.context_pack
+                    ),
+                    state=state,
+                    file_names=(
+                        planned_files
+                    ),
+                )
+            )
+
+            after_refresh = list(
+                state.context_pack.get(
+                    "candidate_files",
+                    [],
+                )
+            )
+
+            added_files = [
+                file_name
+                for file_name in after_refresh
+                if file_name not in before_refresh
+            ]
+
+            trace.add(
+                event_type=(
+                    "context_refreshed_from_plan"
+                ),
+                payload={
+                    "iteration": iteration,
+                    "planned_files_to_modify": (
+                        planned_files
+                    ),
+                    "added_files": added_files,
+                    "candidate_files": (
+                        after_refresh
+                    ),
+                    "snippet_count": len(
+                        state.context_pack.get(
+                            "snippets",
+                            [],
+                        )
+                    ),
+                },
+            )
+
+            if added_files:
+                print(
+                    "Context refreshed from plan: "
+                    + ", ".join(added_files)
+                )
+
             print("Creating JSON patch...")
             state.current_stage = "patch_generation"
             state.patch = self.patcher.propose_patch(
