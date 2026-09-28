@@ -35,9 +35,13 @@ class SingleShotWorkflow:
     - 不做 Workflow-level Retry
     - 不做 Reflection / Test Feedback 后再次生成补丁
 
-    注意：structured output 内部如果为了修复 JSON 格式而再次请求模型，
-    model_calls 可能大于 1。因此这里的 single-shot 指的是
-    “单次 Patch Generation Attempt”，而不是绝对只发生一次 HTTP 调用。
+    注意：
+    structured output 内部如果为了修复 JSON 格式
+    而再次请求模型，model_calls 可能大于 1。
+
+    因此这里的 single-shot 指的是
+    “单次 Patch Generation Attempt”，
+    而不是绝对只发生一次 HTTP 调用。
     """
 
     def __init__(
@@ -53,12 +57,18 @@ class SingleShotWorkflow:
         )
 
         self.scanner = RepoScanner()
-        self.symbol_indexer = SymbolIndexer()
-        self.failure_analyzer = FailureAnalyzer()
+        self.symbol_indexer = (
+            SymbolIndexer()
+        )
+        self.failure_analyzer = (
+            FailureAnalyzer()
+        )
 
-        self.context_builder = ContextBuilder(
-            max_files=5,
-            max_chars_per_files=4000,
+        self.context_builder = (
+            ContextBuilder(
+                max_files=5,
+                max_chars_per_files=4000,
+            )
         )
 
         self.provider = create_provider(
@@ -96,8 +106,8 @@ class SingleShotWorkflow:
 
         cost_tracker = CostTracker()
 
-        state.repo_map = self.scanner.scan(
-            repo
+        state.repo_map = (
+            self.scanner.scan(repo)
         )
 
         state.symbol_index = (
@@ -144,9 +154,11 @@ class SingleShotWorkflow:
         (
             state.failures,
             state.candidates,
-        ) = self.failure_analyzer.analyze(
-            result=test_result,
-            repo=repo,
+        ) = (
+            self.failure_analyzer.analyze(
+                result=test_result,
+                repo=repo,
+            )
         )
 
         state.context_pack = (
@@ -185,14 +197,21 @@ class SingleShotWorkflow:
         }
 
         try:
-            patch = self.patcher.propose_patch(
-                context_pack=(
-                    state.context_pack
-                ),
-                plan=baseline_plan,
-                cost_tracker=cost_tracker,
+            patch = (
+                self.patcher.propose_patch(
+                    context_pack=(
+                        state.context_pack
+                    ),
+                    plan=baseline_plan,
+                    cost_tracker=(
+                        cost_tracker
+                    ),
+                )
             )
-            print("Generated single-shot patch:")
+
+            print(
+                "Generated single-shot patch:"
+            )
             print(patch)
 
             review_result = (
@@ -235,9 +254,9 @@ class SingleShotWorkflow:
                     success=False,
                     message=(
                         "Single-shot patch "
-                        "was generated and approved, "
-                        "but patch application "
-                        "is disabled."
+                        "was generated and "
+                        "approved, but patch "
+                        "application is disabled."
                     ),
                     iteration=1,
                     diff="",
@@ -268,10 +287,28 @@ class SingleShotWorkflow:
                 test_output=initial_output,
             )
 
+        # 从结构化 Patch 中提取本轮真正修改的文件。
+        changed_files = sorted(
+            {
+                str(operation["path"])
+                for operation in patch.get(
+                    "operations",
+                    [],
+                )
+                if operation.get("path")
+            }
+        )
+
+        print(
+            "Changed files for verification:",
+            changed_files,
+        )
+
         verification = (
             self.verifier.verify(
                 repo=repo,
                 test_command=test_command,
+                changed_files=changed_files,
             )
         )
 

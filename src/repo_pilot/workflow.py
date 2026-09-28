@@ -600,9 +600,21 @@ class BugfixWorkflow:
 
             print("Verifying applied patch...")
             state.current_stage = "verification"
+            changed_files = sorted(
+                {
+                    str(operation["path"])
+                    for operation in state.patch.get(
+                        "operations",
+                        [],
+                    )
+                    if operation.get("path")
+                }
+            )
+
             state.verification = self.verifier.verify(
                 repo=repo,
                 test_command=test_command,
+                changed_files=changed_files,
             )
             state.last_test_output = state.verification["output"]
 
