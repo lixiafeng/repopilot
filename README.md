@@ -185,6 +185,12 @@ Workflow 会记录结构化 Trace Event，包括：
 
 ## Benchmark
 
+真实 Python 缺陷案例可通过 [BugsInPy Adapter](docs/bugsinpy.md) 转换为
+`BenchmarkCase`，复用现有 `EvalRunner`。
+
+自动执行 checkout、compile、复现、两种修复策略和独立验收，见
+[BugsInPyRunner](docs/bugsinpy_runner.md)。
+
 RepoPilot 实现了一个 **Context-aware Single-shot Baseline**，用于判断完整 Agent Workflow 是否真的比单轮 Patch Generation 更有价值。
 
 Single-shot 和 Agent 尽可能共享相同组件：

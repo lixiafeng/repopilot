@@ -30,8 +30,6 @@ class LoggedCommands:
         self.counter = 0
 
     def run(self, command: str, cwd: Path) -> CommandResult:
-        if command == "python -m compileall . -q":
-            command = "python -m compileall -q -x '(^|/)(env|\\.git)/' ."
         self.log_dir.mkdir(parents=True, exist_ok=True)
         self.counter += 1
         started = time.monotonic()
@@ -74,6 +72,8 @@ class BugsInPyRunner:
     The dataset clone is mutable in upstream checkout scripts: do not share it
     between simultaneous runners. Results and workspaces are retained for audit.
     """
+
+    STRATEGIES = ("single_shot", "agent", "dual_agent")
 
     def __init__(
         self, dataset_root: Path, output_root: Path, config: RepoPilotConfig,
@@ -121,7 +121,7 @@ class BugsInPyRunner:
                 entry = {"project": project, "bug_id": bug_id, "strategies": {}}
                 report["cases"].append(entry)
                 case_dir = run_dir / f"{project}_{bug_id}"
-                for strategy in ("single_shot", "agent"):
+                for strategy in self.STRATEGIES:
                     print(f"{project}:{bug_id} {strategy}", flush=True)
                     entry["strategies"][strategy] = self._run_strategy(
                         project, bug_id, strategy, case_dir / strategy,
@@ -144,7 +144,7 @@ class BugsInPyRunner:
                         for e in report["cases"]
                     ),
                 }
-                for strategy in ("single_shot", "agent")
+                for strategy in self.STRATEGIES
             }
             self._save(result_path, report)
         return result_path
@@ -267,17 +267,36 @@ class BugsInPyRunner:
         return record
 
     def _workflow(self, strategy: str, root: Path, commands: LoggedCommands):
-        config = replace(self.config, apply_patch=True, trace_dir=root / "traces")
+        if strategy not in self.STRATEGIES:
+            raise ValueError(f"Unknown benchmark strategy: {strategy}")
+
+        config = replace(
+            self.config,
+            apply_patch=True,
+            trace_dir=root / "traces",
+            test_agent_enabled=strategy == "dual_agent",
+        )
         if self.workflow_factories is not None:
-            workflow = self.workflow_factories[strategy](config)
+            factory = self.workflow_factories.get(strategy)
+            if factory is None and strategy == "dual_agent":
+                factory = self.workflow_factories.get("agent")
+            if factory is None:
+                raise ValueError(f"Missing workflow factory for {strategy}")
+            workflow = factory(config)
         else:
             from repo_pilot.single_shot import SingleShotWorkflow
             from repo_pilot.workflow import BugfixWorkflow
 
-            workflow = (SingleShotWorkflow if strategy == "single_shot" else BugfixWorkflow)(config)
+            workflow = (
+                SingleShotWorkflow
+                if strategy == "single_shot"
+                else BugfixWorkflow
+            )(config)
         workflow.commands = commands
         if hasattr(workflow, "verifier"):
             workflow.verifier.commands = commands
+        if getattr(workflow, "test_agent", None) is not None:
+            workflow.test_agent.commands = commands
         if hasattr(workflow, "scanner"):
             workflow.scanner.IGNORED_DIRS = workflow.scanner.IGNORED_DIRS | {"env"}
         if hasattr(workflow, "enabled_skills"):

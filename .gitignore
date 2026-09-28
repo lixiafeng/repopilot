@@ -16,4 +16,9 @@ eval_runs/
 .idea/
 .vscode/
 手写流程.txt
+benchmark_runs/.env
+.env
+runs/
 benchmark_runs/
+results.json
+docs/

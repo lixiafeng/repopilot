@@ -64,15 +64,20 @@ def test_full_orchestration_and_results_are_independent(experiment):
     report = json.loads(path.read_text())
     assert path.name == "results.json"
     assert report["status"] == "completed"
-    assert [version for _, version in preparations] == [0, 1, 0, 0, 1, 0]
-    assert len(set(root for root, _ in preparations)) == 6
-    assert len(set(workflows)) == 2
+    assert [version for _, version in preparations] == [
+        0, 1, 0,
+        0, 1, 0,
+        0, 1, 0,
+    ]
+    assert len(set(root for root, _ in preparations)) == 9
+    assert len(set(workflows)) == 3
     for result in report["cases"][0]["strategies"].values():
         assert result["status"] == "resolved"
         assert result["workflow"]["success"] is False
         assert result["cost"]["calls"] == 1
         assert result["evaluation"]["exit_code"] == 0
     assert report["summary"]["agent"]["resolved"] == 1
+    assert report["summary"]["dual_agent"]["resolved"] == 1
 
 
 @pytest.mark.parametrize("code,timeout,status", [
@@ -120,6 +125,7 @@ def test_one_strategy_error_does_not_skip_other_strategy(experiment, monkeypatch
     results = json.loads(runner.run([("sample", 1)]).read_text())["cases"][0]["strategies"]
     assert results["single_shot"]["status"] == "compile_failed"
     assert results["agent"]["status"] == "resolved"
+    assert results["dual_agent"]["status"] == "resolved"
 
 
 def test_test_modification_rejected(experiment, monkeypatch):
@@ -219,3 +225,42 @@ def test_local_shell_checkout_compile_repair_and_evaluate(tmp_path):
     report = json.loads(runner.run([("sample", 1)]).read_text())
     assert report["summary"]["single_shot"]["resolved"] == 1
     assert report["summary"]["agent"]["resolved"] == 1
+    assert report["summary"]["dual_agent"]["resolved"] == 1
+
+
+def test_strategy_configs_keep_agent_and_dual_agent_separate(
+    tmp_path,
+    monkeypatch,
+):
+    dataset = tmp_path / "dataset"
+    tools = dataset / "framework" / "bin"
+    tools.mkdir(parents=True)
+    for name in ("bugsinpy-checkout", "bugsinpy-compile"):
+        (tools / name).touch()
+
+    received = {}
+
+    class Workflow:
+        def __init__(self, config):
+            received[config.trace_dir.parent.name] = config.test_agent_enabled
+
+    factories = {
+        strategy: Workflow
+        for strategy in module.BugsInPyRunner.STRATEGIES
+    }
+    runner = module.BugsInPyRunner(
+        dataset,
+        tmp_path / "out",
+        RepoPilotConfig(test_agent_enabled=True),
+        workflow_factories=factories,
+    )
+    commands = SimpleNamespace()
+
+    for strategy in runner.STRATEGIES:
+        runner._workflow(strategy, tmp_path / strategy, commands)
+
+    assert received == {
+        "single_shot": False,
+        "agent": False,
+        "dual_agent": True,
+    }

@@ -22,6 +22,7 @@ from repo_pilot.skills import (
 )
 from repo_pilot.state import AgentState
 from repo_pilot.symbols import SymbolIndexer
+from repo_pilot.test_agent import TestAgent
 from repo_pilot.tools import CommandTools
 from repo_pilot.trace import TraceRecorder
 from repo_pilot.verifier import Verifier
@@ -39,6 +40,15 @@ class BugfixWorkflow:
             provider_name=config.provider,
             model=config.model,
         )
+        self.test_agent = (
+            TestAgent(
+                provider=self.provider,
+                commands=self.commands,
+                timeout_seconds=config.command_timeout_sec,
+            )
+            if config.test_agent_enabled
+            else None
+        )
         self.enabled_skills = self._load_enabled_skills()
         self.skill_registry = SkillRegistry()
         if "regression_test" in self.enabled_skills:
@@ -55,6 +65,30 @@ class BugfixWorkflow:
         self.retry = RetryPolicy()
         self.output_writer = OutputWriter()
         self.last_cost_summary: dict = {}
+
+    @staticmethod
+    def _record_skill_cost(
+        *,
+        result,
+        cost_tracker: CostTracker,
+        call_name: str,
+    ) -> None:
+        model_calls = int(result.data.get("model_calls", 0) or 0)
+
+        if model_calls <= 0:
+            return
+
+        cost_tracker.record(
+            call_name=call_name,
+            response=ModelResponse(
+                content=result.message,
+                input_tokens=int(result.data.get("input_tokens", 0) or 0),
+                output_tokens=int(result.data.get("output_tokens", 0) or 0),
+                estimated_cost=float(
+                    result.data.get("estimated_cost", 0.0) or 0.0
+                ),
+            ),
+        )
 
     @staticmethod
     def _load_enabled_skills() -> set[str]:
@@ -78,6 +112,8 @@ class BugfixWorkflow:
         registered = set(self.skill_registry.names())
 
         for skill_name in sorted(self.enabled_skills):
+            if skill_name == "regression_test" and self.test_agent is not None:
+                continue
             if skill_name not in registered:
                 trace.add(
                     event_type="skill_skipped",
@@ -113,20 +149,11 @@ class BugfixWorkflow:
                 print(f'Skill failed unexpectedly: {skill_name}: {exc}')
                 continue
 
-            model_calls = int(result.data.get("model_calls", 0) or 0)
-
-            if model_calls > 0:
-                cost_tracker.record(
-                    call_name=(f"skill_{result.name}"),
-                    response=ModelResponse(
-                        content=result.message,
-                        input_tokens=int(result.data.get("input_tokens", 0) or 0),
-                        output_tokens=int(result.data.get("output_tokens", 0) or 0),
-                        estimated_cost=float(
-                            result.data.get("estimated_cost", 0.0) or 0.0
-                        ),
-                    ),
-                )
+            self._record_skill_cost(
+                result=result,
+                cost_tracker=cost_tracker,
+                call_name=f"skill_{result.name}",
+            )
 
             trace.add(
                 event_type="skill_finished",
@@ -635,6 +662,118 @@ class BugfixWorkflow:
             print(state.verification["output"])
 
             if state.verification["success"]:
+                if self.test_agent is not None:
+                    print("Running Test Agent...")
+                    state.current_stage = "test_agent"
+                    test_agent_result = self.test_agent.run(
+                        repo_path=repo,
+                        issue=issue,
+                        diff=state.diff,
+                        test_command=test_command,
+                    )
+                    self._record_skill_cost(
+                        result=test_agent_result,
+                        cost_tracker=cost_tracker,
+                        call_name="test_agent_regression_test",
+                    )
+                    trace.add(
+                        event_type="test_agent_finished",
+                        payload={
+                            "iteration": iteration,
+                            "success": test_agent_result.success,
+                            "message": test_agent_result.message,
+                            "data": test_agent_result.data,
+                        },
+                    )
+
+                    if not test_agent_result.success:
+                        failure_kind = test_agent_result.data.get(
+                            "failure_kind",
+                            "execution_error",
+                        )
+                        feedback = str(
+                            test_agent_result.data.get("output", "")
+                            or test_agent_result.message
+                        )
+                        failure_type = self.retry.classify(
+                            stage="test_agent",
+                            output=feedback,
+                            error_message=test_agent_result.message,
+                        )
+                        retry_allowed = (
+                            failure_kind == "test_failure"
+                            and self.retry.should_retry(
+                                failure_type=failure_type,
+                                iteration=iteration,
+                                max_iterations=self.config.max_iterations,
+                            )
+                        )
+                        state.attempts.append(
+                            {
+                                "iteration": iteration,
+                                "stage": "test_agent",
+                                "failure_type": failure_type,
+                                "retry_allowed": retry_allowed,
+                                "test_agent": {
+                                    "message": test_agent_result.message,
+                                    **test_agent_result.data,
+                                },
+                                "verification": {
+                                    "stage": "test_agent",
+                                    "success": False,
+                                    "output": feedback,
+                                },
+                                "diff": state.diff,
+                            }
+                        )
+                        trace.add(
+                            event_type="retry_decision",
+                            payload={
+                                "iteration": iteration,
+                                "stage": "test_agent",
+                                "failure_type": failure_type,
+                                "failure_kind": failure_kind,
+                                "retry_allowed": retry_allowed,
+                                "output": feedback,
+                            },
+                        )
+                        last_failure_output = feedback
+                        state.last_test_output = feedback
+                        last_diff = state.diff
+                        state.current_stage = "rollback"
+                        self.patcher.restore_snapshot(
+                            repo=repo,
+                            snapshot=snapshot,
+                        )
+                        trace.add(
+                            event_type="snapshot_restored",
+                            payload={
+                                "iteration": iteration,
+                                "reason": "test_agent_failed",
+                            },
+                        )
+                        print(
+                            "Test Agent rejected the repair; repository restored."
+                        )
+
+                        if retry_allowed:
+                            continue
+
+                        return self._finish(
+                            cost_tracker=cost_tracker,
+                            trace=trace,
+                            result=WorkflowResult(
+                                success=False,
+                                message=(
+                                    "Test Agent failed: "
+                                    f"{test_agent_result.message}"
+                                ),
+                                iteration=iteration,
+                                diff=last_diff,
+                                test_output=last_failure_output,
+                            ),
+                        )
+
                 state.current_stage = "post_repair_skills"
                 self._run_post_repair_skills(
                     repo=repo,
@@ -651,7 +790,14 @@ class BugfixWorkflow:
                     trace=trace,
                     result=WorkflowResult(
                         success=True,
-                        message=("Patch applied and " "verified successfully."),
+                        message=(
+                            "Patch applied and verified successfully"
+                            + (
+                                " by the original tests and Test Agent."
+                                if self.test_agent is not None
+                                else "."
+                            )
+                        ),
                         iteration=iteration,
                         diff=state.diff,
                         test_output=state.verification["output"],

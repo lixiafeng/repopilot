@@ -7,6 +7,7 @@ from repo_pilot.skills import (
     RegressionTestSkill,
     SkillContext,
 )
+from repo_pilot.tools import CommandResult
 
 
 class PassingGenerator:
@@ -132,3 +133,35 @@ def test_regression_test_skill_blocks_path_escape(
 
     assert result.success is False
     assert "escapes" in result.message
+
+
+class ExitCodeCommands:
+    def __init__(self, exit_code: int) -> None:
+        self.exit_code = exit_code
+
+    def run(self, command: str, cwd: Path) -> CommandResult:
+        return CommandResult(
+            command=command,
+            exit_code=self.exit_code,
+            stdout="pytest output",
+            stderr="",
+            duration_seconds=0.01,
+        )
+
+
+def test_regression_test_skill_distinguishes_test_and_execution_failures(
+    tmp_path: Path,
+) -> None:
+    repo = _make_repo(tmp_path)
+
+    assertion_failure = RegressionTestSkill(
+        PassingGenerator(),
+        commands=ExitCodeCommands(1),
+    ).run(SkillContext(repo_path=repo, issue="test"))
+    collection_error = RegressionTestSkill(
+        PassingGenerator(),
+        commands=ExitCodeCommands(2),
+    ).run(SkillContext(repo_path=repo, issue="test"))
+
+    assert assertion_failure.data["failure_kind"] == "test_failure"
+    assert collection_error.data["failure_kind"] == "execution_error"

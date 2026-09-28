@@ -12,14 +12,16 @@ def run(
     test_command: str=typer.Option("python -m pytest -q","--test-command"),
     provider: str=typer.Option("fake","--provider"),
     model:str=typer.Option("fake-model","--model"),
-    apply_patch:bool=typer.Option(True,"--aplply/--no-apply"),
+    apply_patch:bool=typer.Option(True,"--apply/--no-apply"),
     max_iterations:int =typer.Option(2,"--max-iterations"),
+    test_agent: bool = typer.Option(False, "--test-agent/--no-test-agent"),
 ):
     config=RepoPilotConfig(
         provider=provider,
         model=model,
         apply_patch=apply_patch,
         max_iterations=max_iterations,
+        test_agent_enabled=test_agent,
     )
     try:
         workflow=BugfixWorkflow(config)

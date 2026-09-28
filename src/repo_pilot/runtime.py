@@ -37,6 +37,7 @@ def create_workflow(
     max_iterations: int,
     apply_patch: bool,
     command_timeout_sec: int,
+    test_agent_enabled: bool = False,
 ) -> BugfixWorkflow:
     trace_dir = Path(
         os.getenv("REPOPILOT_TRACE_DIR", "runs")
@@ -50,5 +51,6 @@ def create_workflow(
         apply_patch=apply_patch,
         command_timeout_sec=command_timeout_sec,
         trace_dir=trace_dir,
+        test_agent_enabled=test_agent_enabled,
     )
     return BugfixWorkflow(config=config)

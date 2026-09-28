@@ -11,6 +11,7 @@ from typing import Any, Protocol
 
 from repo_pilot.provider import Provider
 from repo_pilot.skills.base import Skill, SkillContext, SkillResult
+from repo_pilot.tools import CommandTools
 
 
 @dataclass(slots=True)
@@ -271,10 +272,22 @@ class RegressionTestSkill(Skill):
         *,
         timeout_seconds: int = 60,
         keep_generated_test: bool = False,
+        commands: CommandTools | None = None,
     ) -> None:
         self.generator = generator
         self.timeout_seconds = timeout_seconds
         self.keep_generated_test = keep_generated_test
+        self._uses_default_commands = commands is None
+        self._commands = commands or CommandTools(timeout_sec=timeout_seconds)
+
+    @property
+    def commands(self) -> CommandTools:
+        return self._commands
+
+    @commands.setter
+    def commands(self, value: CommandTools) -> None:
+        self._commands = value
+        self._uses_default_commands = False
 
     def run(
         self,
@@ -300,6 +313,7 @@ class RegressionTestSkill(Skill):
                 name=self.name,
                 success=False,
                 message=f"Failed to generate regression test: {exc}",
+                data={"failure_kind": "generation_error"},
             )
 
         target.parent.mkdir(
@@ -326,20 +340,11 @@ class RegressionTestSkill(Skill):
 
             relative_target = target.relative_to(repo)
 
-            completed = subprocess.run(
-                [
-                    sys.executable,
-                    "-m",
-                    "pytest",
-                    "-q",
-                    str(relative_target),
-                ],
-                cwd=repo,
-                capture_output=True,
-                text=True,
-                timeout=self.timeout_seconds,
-                check=False,
+            python = sys.executable if self._uses_default_commands else "python"
+            command = subprocess.list2cmdline(
+                [python, "-m", "pytest", "-q", str(relative_target)]
             )
+            completed = self.commands.run(command=command, cwd=repo)
 
             duration = time.perf_counter() - started
             output = self._merge_output(
@@ -349,45 +354,29 @@ class RegressionTestSkill(Skill):
 
             return SkillResult(
                 name=self.name,
-                success=completed.returncode == 0,
+                success=completed.success,
                 message=(
                     "Generated regression test passed."
-                    if completed.returncode == 0
+                    if completed.success
                     else "Generated regression test failed."
                 ),
                 data={
                     "test_path": relative_target.as_posix(),
+                    "test_content": generated.content,
                     "rationale": generated.rationale,
-                    "exit_code": completed.returncode,
+                    "exit_code": completed.exit_code,
                     "duration_seconds": round(duration, 4),
                     "output": output,
-                    "model_calls": 1,
-                    "input_tokens": generated.input_tokens,
-                    "output_tokens": generated.output_tokens,
-                    "estimated_cost": generated.estimated_cost,
-                },
-            )
-
-        except subprocess.TimeoutExpired as exc:
-            duration = time.perf_counter() - started
-            output = self._merge_output(
-                self._to_text(exc.stdout),
-                self._to_text(exc.stderr),
-            )
-
-            return SkillResult(
-                name=self.name,
-                success=False,
-                message=(
-                    "Generated regression test timed out after "
-                    f"{self.timeout_seconds}s."
-                ),
-                data={
-                    "test_path": target.relative_to(repo).as_posix(),
-                    "rationale": generated.rationale,
-                    "duration_seconds": round(duration, 4),
-                    "output": output,
-                    "timeout": True,
+                    "timeout": completed.timeout,
+                    "failure_kind": (
+                        None
+                        if completed.success
+                        else "timeout"
+                        if completed.timeout
+                        else "test_failure"
+                        if completed.exit_code == 1
+                        else "execution_error"
+                    ),
                     "model_calls": 1,
                     "input_tokens": generated.input_tokens,
                     "output_tokens": generated.output_tokens,
@@ -404,8 +393,10 @@ class RegressionTestSkill(Skill):
                 message=f"Regression test execution failed: {exc}",
                 data={
                     "test_path": target.relative_to(repo).as_posix(),
+                    "test_content": generated.content,
                     "rationale": generated.rationale,
                     "duration_seconds": round(duration, 4),
+                    "failure_kind": "execution_error",
                     "model_calls": 1,
                     "input_tokens": generated.input_tokens,
                     "output_tokens": generated.output_tokens,

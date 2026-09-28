@@ -9,3 +9,4 @@ class RepoPilotConfig:
     max_iterations:  int = 2
     trace_dir: Path = Path("runs")
     command_timeout_sec: int = 30
+    test_agent_enabled: bool = False
